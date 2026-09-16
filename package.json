@@ -8,16 +8,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@google/genai": "*",
+    "@supabase/supabase-js": "^2.116.0",
+    "lucide-react": "^0.454.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "lucide-react": "^0.454.0",
-    "@google/genai": "*",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@types/node": "^20.10.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
-    "@types/node": "^20.10.0",
     "@vitejs/plugin-react": "^4.2.0",
     "autoprefixer": "^10.4.16",
     "postcss": "^8.4.31",

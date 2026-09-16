@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Project, Task, ViewState, TaskStatus, AppNotification, Milestone, ProjectStatus, AppSettings } from './types';
-import { getProjects, saveProjects, getNotifications, addNotification, markNotificationRead, checkDeadlines, createProject, duplicateProject, deleteProject, hardDeleteProject, addMilestone, updateMilestone, deleteMilestone, setProjectStatus, generateBackupData, getSettings, saveSettings, importData, exportData, updateProject } from './services/storageService';
+import { getProjects, saveProjects, getNotifications, addNotification, markNotificationRead, checkDeadlines, createProject, duplicateProject, deleteProject, hardDeleteProject, addMilestone, updateMilestone, deleteMilestone, setProjectStatus, generateBackupData, getSettings, saveSettings, importData, exportData, updateProject } from './services/supabaseService';
 import { exportToExcelDB, importFromExcelDB, generateExcelBuffer } from './services/excelService';
 import { Dashboard } from './components/Dashboard';
 import { ProjectDetail } from './components/ProjectDetail';
@@ -20,6 +20,7 @@ const AppContent: React.FC = () => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [loading, setLoading] = useState(true);
   
   // User Profile State
   const [userName, setUserName] = useState('John Doe');
@@ -41,35 +42,44 @@ const AppContent: React.FC = () => {
 
   // Load data on mount
   useEffect(() => {
-    const data = getProjects();
-    const safeData = Array.isArray(data) ? data : [];
-    setProjects(safeData);
-    
-    // Notification initialization
-    const savedNotifications = getNotifications();
-    const safeSavedNotifications = Array.isArray(savedNotifications) ? savedNotifications : [];
-    
-    // Check deadlines returns array
-    const deadlineNotifications = checkDeadlines(safeData);
-    
-    // Combine if checkDeadlines returned new ones, otherwise use saved
-    setNotifications(deadlineNotifications.length > safeSavedNotifications.length ? deadlineNotifications : safeSavedNotifications);
+    const loadData = async () => {
+      try {
+        const data = await getProjects();
+        const safeData = Array.isArray(data) ? data : [];
+        setProjects(safeData);
+        
+        // Notification initialization
+        const savedNotifications = await getNotifications();
+        const safeSavedNotifications = Array.isArray(savedNotifications) ? savedNotifications : [];
+        
+        // Check deadlines returns array
+        const deadlineNotifications = await checkDeadlines(safeData);
+        
+        // Combine if checkDeadlines returned new ones, otherwise use saved
+        setNotifications(deadlineNotifications.length > safeSavedNotifications.length ? deadlineNotifications : safeSavedNotifications);
 
-    // Load Settings
-    const settings = getSettings();
-    if (settings) {
-        if (settings.userName) setUserName(settings.userName);
-    }
-    if (window.electron && settings.backupPath) {
-        setBackupPath(settings.backupPath);
-    }
+        // Load Settings
+        const settings = await getSettings();
+        if (settings) {
+            if (settings.userName) setUserName(settings.userName);
+        }
+        if (window.electron && settings.backupPath) {
+            setBackupPath(settings.backupPath);
+        }
+      } catch (err) {
+        console.error('Failed to load data:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
   }, []);
 
   // Auto Backup Logic
   useEffect(() => {
       const performBackup = async () => {
           try {
-              const currentSettings = getSettings();
+              const currentSettings = await getSettings();
               // Check if any auto-backup feature is enabled
               const isExcelEnabled = currentSettings.enableAutoExcelExport;
               
@@ -93,10 +103,10 @@ const AppContent: React.FC = () => {
               const excelFileName = `PT_${timestamp}.xlsx`;
 
               // 1. Generate Data
-              const jsonData = generateBackupData();
+              const jsonData = await generateBackupData();
               let excelData: Uint8Array | null = null;
               if (isExcelEnabled) {
-                   const currentProjects = getProjects();
+                   const currentProjects = await getProjects();
                    excelData = generateExcelBuffer(currentProjects);
               }
 
@@ -137,7 +147,8 @@ const AppContent: React.FC = () => {
                       read: false,
                       createdAt: new Date().toISOString(),
                   };
-                  setNotifications(prev => addNotification(notif));
+                  const updated = await addNotification(notif);
+                  setNotifications(updated);
               }
 
           } catch (err) {
@@ -167,11 +178,11 @@ const AppContent: React.FC = () => {
       return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U';
   };
 
-  const saveUserName = () => {
+  const saveUserName = async () => {
       if (tempName.trim()) {
           setUserName(tempName.trim());
-          const s = getSettings();
-          saveSettings({ ...s, userName: tempName.trim() });
+          const s = await getSettings();
+          await saveSettings({ ...s, userName: tempName.trim() });
           setIsEditingName(false);
           showToast("Nickname updated");
       }
@@ -212,8 +223,22 @@ const AppContent: React.FC = () => {
       return updatedTasks;
   };
 
-  const handleCreateTask = (newTask: Task) => {
-    let projectUpdated = false;
+  const handleCreateTask = async (newTask: Task) => {
+    // Handle notification for new assignment before map
+    if (newTask.assignee && !projects.some(p => p.id === newTask.projectId && p.tasks.some(t => t.id === newTask.id))) {
+        const notif: AppNotification = {
+            id: (crypto as any).randomUUID(),
+            title: language === 'zh' ? '新任务分配' : 'New Task Assigned',
+            message: language === 'zh' ? `您被分配了任务 "${newTask.title}"` : `You have been assigned to "${newTask.title}"`,
+            type: 'ASSIGNMENT',
+            read: false,
+            createdAt: new Date().toISOString(),
+            relatedId: newTask.id
+        };
+        const updatedNotifs = await addNotification(notif);
+        setNotifications(updatedNotifs);
+    }
+
     const updatedProjects = projects.map(p => {
         if (p.id === newTask.projectId) {
             let updatedTasks = [...p.tasks];
@@ -224,38 +249,24 @@ const AppContent: React.FC = () => {
                 updatedTasks[taskIndex] = newTask;
             } else {
                 updatedTasks.push(newTask);
-                // Notification for new assignment (Simulated)
-                if (newTask.assignee) {
-                     const notif: AppNotification = {
-                        id: (crypto as any).randomUUID(),
-                        title: language === 'zh' ? '新任务分配' : 'New Task Assigned',
-                        message: language === 'zh' ? `您被分配了任务 "${newTask.title}"` : `You have been assigned to "${newTask.title}"`,
-                        type: 'ASSIGNMENT',
-                        read: false,
-                        createdAt: new Date().toISOString(),
-                        relatedId: newTask.id
-                    };
-                    setNotifications(prev => addNotification(notif));
-                }
             }
             
             // 2. Handle Dependency Cascade
             updatedTasks = propagateDependencyDelays(updatedTasks, newTask);
 
-            projectUpdated = true;
             return { ...p, tasks: updatedTasks };
         }
         return p;
     });
     
     setProjects(updatedProjects);
-    saveProjects(updatedProjects);
+    await saveProjects(updatedProjects);
     
     // Return to project view
     setViewState({ type: 'PROJECT_DETAIL', projectId: newTask.projectId });
   };
 
-  const handleDeleteTask = (taskId: string, projectId: string) => {
+  const handleDeleteTask = async (taskId: string, projectId: string) => {
       if (!taskId || !projectId) return;
 
       const updatedProjects = projects.map(p => {
@@ -265,11 +276,11 @@ const AppContent: React.FC = () => {
           return p;
       });
       setProjects(updatedProjects);
-      saveProjects(updatedProjects);
+      await saveProjects(updatedProjects);
       setViewState({ type: 'PROJECT_DETAIL', projectId });
   };
 
-  const handleUpdateTaskStatus = (projectId: string, taskId: string, status: TaskStatus) => {
+  const handleUpdateTaskStatus = async (projectId: string, taskId: string, status: TaskStatus) => {
       const updatedProjects = projects.map(p => {
           if (p.id === projectId) {
               const task = p.tasks.find(t => t.id === taskId);
@@ -286,7 +297,7 @@ const AppContent: React.FC = () => {
                       createdAt: new Date().toISOString(),
                       relatedId: taskId
                   };
-                  setNotifications(prev => addNotification(notif));
+                  addNotification(notif).then(updated => setNotifications(updated));
               }
 
               return {
@@ -297,16 +308,14 @@ const AppContent: React.FC = () => {
           return p;
       });
       setProjects(updatedProjects);
-      saveProjects(updatedProjects);
+      await saveProjects(updatedProjects);
   };
 
-  const handleNotificationClick = (notification: AppNotification) => {
+  const handleNotificationClick = async (notification: AppNotification) => {
       // 1. Mark as read
-      setNotifications(prev => {
-          const updated = prev.map(n => n.id === notification.id ? { ...n, read: true } : n);
-          markNotificationRead(notification.id);
-          return updated;
-      });
+      await markNotificationRead(notification.id);
+      const updated = notifications.map(n => n.id === notification.id ? { ...n, read: true } : n);
+      setNotifications(updated);
 
       // 2. Handle Action based on type
       if (notification.type === 'BACKUP') {
@@ -315,59 +324,59 @@ const AppContent: React.FC = () => {
       // Can add other click handlers here (e.g. navigate to task)
   };
 
-  const handleCreateProject = (name: string, desc: string) => {
-      const updated = createProject(name, desc);
+  const handleCreateProject = async (name: string, desc: string) => {
+      const updated = await createProject(name, desc);
       setProjects(updated);
       showToast(t.dataSaved);
   };
 
-  const handleUpdateProject = (updatedProject: Project) => {
-      updateProject(updatedProject);
+  const handleUpdateProject = async (updatedProject: Project) => {
+      await updateProject(updatedProject);
       const newProjects = projects.map(p => p.id === updatedProject.id ? updatedProject : p);
       setProjects(newProjects);
       showToast(t.dataSaved);
   };
 
-  const handleDuplicateProject = (projectId: string) => {
-      const updated = duplicateProject(projectId, t.copySuffix);
+  const handleDuplicateProject = async (projectId: string) => {
+      const updated = await duplicateProject(projectId, t.copySuffix);
       setProjects(updated);
       showToast(t.dataSaved);
   }
 
-  const handleDeleteProject = (projectId: string) => {
+  const handleDeleteProject = async (projectId: string) => {
       if (!projectId) return;
-      // deleteProject is now "soft delete" in storageService
-      const updated = deleteProject(projectId);
+      // deleteProject is now "soft delete" in supabaseService
+      const updated = await deleteProject(projectId);
       setProjects(updated);
       showToast(t.recycleBinMsg);
   };
 
   // Permanently delete
-  const handleHardDeleteProject = (projectId: string) => {
+  const handleHardDeleteProject = async (projectId: string) => {
       if (!projectId) return;
-      const updated = hardDeleteProject(projectId);
+      const updated = await hardDeleteProject(projectId);
       setProjects(updated);
   };
 
   // New handler for Suspend/Restore
-  const handleUpdateProjectStatus = (projectId: string, status: ProjectStatus) => {
+  const handleUpdateProjectStatus = async (projectId: string, status: ProjectStatus) => {
       if (!projectId) return;
-      const updated = setProjectStatus(projectId, status);
+      const updated = await setProjectStatus(projectId, status);
       setProjects(updated);
   };
   
-  const handleAddMilestone = (projectId: string, milestone: Milestone) => {
-      const updated = addMilestone(projectId, milestone);
+  const handleAddMilestone = async (projectId: string, milestone: Milestone) => {
+      const updated = await addMilestone(projectId, milestone);
       setProjects(updated);
   };
 
-  const handleUpdateMilestone = (projectId: string, milestone: Milestone) => {
-      const updated = updateMilestone(projectId, milestone);
+  const handleUpdateMilestone = async (projectId: string, milestone: Milestone) => {
+      const updated = await updateMilestone(projectId, milestone);
       setProjects(updated);
   };
 
-  const handleDeleteMilestone = (projectId: string, milestoneId: string) => {
-      const updated = deleteMilestone(projectId, milestoneId);
+  const handleDeleteMilestone = async (projectId: string, milestoneId: string) => {
+      const updated = await deleteMilestone(projectId, milestoneId);
       setProjects(updated);
   };
 
@@ -394,10 +403,10 @@ const AppContent: React.FC = () => {
 
             if (result) {
                 setProjects(result.projects);
-                saveProjects(result.projects);
+                await saveProjects(result.projects);
                 
                 if (result.settings) {
-                    saveSettings(result.settings);
+                    await saveSettings(result.settings);
                     if (result.settings.userName) setUserName(result.settings.userName);
                 }
                 showToast(t.dataImported);
@@ -519,6 +528,17 @@ const AppContent: React.FC = () => {
   };
 
   const unreadCount = notifications.filter(n => !n.read).length;
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-slate-600 font-medium">Loading data from Supabase...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans" onClick={() => { setShowNotifications(false); setShowProfileMenu(false); }}>
