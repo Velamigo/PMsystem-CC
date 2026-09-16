@@ -73,7 +73,6 @@ export interface AppNotification {
 }
 
 export interface AppSettings {
-  userName?: string; // New field for user profile
   commonTags: string[];
   commonAssignees: string[];
   commonRequesters: string[];

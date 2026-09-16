@@ -6,7 +6,6 @@ const NOTIFICATION_KEY = 'protrack_notifications_v4_zh';
 const SETTINGS_KEY = 'protrack_settings_v1';
 
 const DEFAULT_SETTINGS: AppSettings = {
-    userName: 'John Doe',
     commonTags: ['Bug', 'Feature', 'Design', 'Backend', 'Frontend', 'Urgent'],
     commonAssignees: ['Alice', 'Bob', 'Charlie', 'David'],
     commonRequesters: ['Product Manager', 'CEO', 'Client A', 'Client B'],

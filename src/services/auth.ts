@@ -17,12 +17,32 @@ export interface User {
   created_at: string;
 }
 
-async function hashPassword(password: string): Promise<string> {
+// Generate a random salt
+function generateSalt(): string {
+  const array = new Uint8Array(16);
+  crypto.getRandomValues(array);
+  return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Hash password with salt: returns "salt:hash"
+async function hashPasswordWithSalt(password: string, salt?: string): Promise<string> {
+  const actualSalt = salt || generateSalt();
   const encoder = new TextEncoder();
-  const data = encoder.encode(password);
+  // Combine salt + password for hashing
+  const data = encoder.encode(actualSalt + password);
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  const hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return `${actualSalt}:${hash}`;
+}
+
+// Verify password against stored "salt:hash"
+async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  const parts = storedHash.split(':');
+  if (parts.length !== 2) return false;
+  const [salt] = parts;
+  const newHash = await hashPasswordWithSalt(password, salt);
+  return newHash === storedHash;
 }
 
 async function ensureAdminExists() {
@@ -33,7 +53,7 @@ async function ensureAdminExists() {
     .single();
 
   if (!admin) {
-    const adminHash = await hashPassword('ProTrack2024!');
+    const adminHash = await hashPasswordWithSalt('ProTrack2024!');
     await supabase
       .from('users')
       .insert({
@@ -49,16 +69,19 @@ async function ensureAdminExists() {
 export async function login(name: string, password: string): Promise<{ user: User | null; error: string | null }> {
   await ensureAdminExists();
 
-  const passwordHash = await hashPassword(password);
-
   const { data, error } = await supabase
     .from('users')
     .select('*')
     .eq('name', name)
-    .eq('password_hash', passwordHash)
     .single();
 
   if (error || !data) {
+    return { user: null, error: '用户名或密码错误' };
+  }
+
+  // Verify password with salt
+  const isValid = await verifyPassword(password, data.password_hash);
+  if (!isValid) {
     return { user: null, error: '用户名或密码错误' };
   }
 
@@ -95,7 +118,7 @@ export async function register(name: string, password: string): Promise<{ succes
     return { success: false, error: '用户名已存在' };
   }
 
-  const passwordHash = await hashPassword(password);
+  const passwordHash = await hashPasswordWithSalt(password);
 
   const { error } = await supabase
     .from('users')
@@ -153,7 +176,7 @@ export async function getAllUsers(): Promise<User[]> {
 }
 
 export async function resetUserPassword(userId: string, newPassword: string): Promise<{ success: boolean; error: string | null }> {
-  const passwordHash = await hashPassword(newPassword);
+  const passwordHash = await hashPasswordWithSalt(newPassword);
   const { error } = await supabase
     .from('users')
     .update({ password_hash: passwordHash })
@@ -184,19 +207,23 @@ export async function changeUsername(userId: string, newName: string): Promise<{
 }
 
 export async function changeOwnPassword(userId: string, oldPassword: string, newPassword: string): Promise<{ success: boolean; error: string | null }> {
-  const oldHash = await hashPassword(oldPassword);
   const { data: user } = await supabase
     .from('users')
     .select('*')
     .eq('id', userId)
-    .eq('password_hash', oldHash)
     .single();
 
   if (!user) {
+    return { success: false, error: '用户不存在' };
+  }
+
+  // Verify old password with salt
+  const isValid = await verifyPassword(oldPassword, user.password_hash);
+  if (!isValid) {
     return { success: false, error: '原密码错误' };
   }
 
-  const newHash = await hashPassword(newPassword);
+  const newHash = await hashPasswordWithSalt(newPassword);
   const { error } = await supabase
     .from('users')
     .update({ password_hash: newHash })

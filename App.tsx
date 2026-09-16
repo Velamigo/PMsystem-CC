@@ -13,7 +13,7 @@ import { NotificationList } from './components/NotificationList';
 import { GlobalTaskList } from './components/GlobalTaskList';
 import LoginPage from './src/components/LoginPage';
 import AdminPanel from './src/components/AdminPanel';
-import { Bell, Calendar, Layout, Globe, Download, Upload, Settings, Trash2, X, RefreshCw, AlertTriangle, LogOut, Edit2, CheckCircle, Database, Shield, Key } from 'lucide-react';
+import { Bell, Calendar, Layout, Globe, Download, Upload, Settings, Trash2, X, RefreshCw, AlertTriangle, LogOut, CheckCircle, Database, Shield, Key } from 'lucide-react';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 
 const AppContent: React.FC = () => {
@@ -32,10 +32,7 @@ const AppContent: React.FC = () => {
   const [passwordMsg, setPasswordMsg] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const [loading, setLoading] = useState(true);
   
-  // User Profile State
-  const [userName, setUserName] = useState('User');
-  const [isEditingName, setIsEditingName] = useState(false);
-  const [tempName, setTempName] = useState('');
+
 
   // Toast Notification
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -56,7 +53,6 @@ const AppContent: React.FC = () => {
     if (user) {
       setIsAuthenticated(true);
       setCurrentUser(user);
-      setUserName(user.name);
     }
   }, []);
 
@@ -83,10 +79,9 @@ const AppContent: React.FC = () => {
         // Load Settings
         const settings = await getSettings();
         if (settings) {
-            if (settings.userName) setUserName(settings.userName);
-        }
-        if (window.electron && settings.backupPath) {
-            setBackupPath(settings.backupPath);
+            if (window.electron && settings.backupPath) {
+                setBackupPath(settings.backupPath);
+            }
         }
       } catch (err) {
         console.error('Failed to load data:', err);
@@ -110,7 +105,6 @@ const AppContent: React.FC = () => {
     if (user) {
       setCurrentUser(user);
       setIsAuthenticated(true);
-      setUserName(user.name);
       setLoading(true);
     }
   };
@@ -132,7 +126,6 @@ const AppContent: React.FC = () => {
   const handleUpdateCurrentUser = (user: AuthUser) => {
     updateCurrentUser(user);
     setCurrentUser(user);
-    setUserName(user.name);
   };
 
   // Auto Backup Logic
@@ -238,15 +231,7 @@ const AppContent: React.FC = () => {
       return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U';
   };
 
-  const saveUserName = async () => {
-      if (tempName.trim()) {
-          setUserName(tempName.trim());
-          const s = await getSettings();
-          await saveSettings({ ...s, userName: tempName.trim() });
-          setIsEditingName(false);
-          showToast("Nickname updated");
-      }
-  };
+
 
   // Recursively update downstream tasks
   const propagateDependencyDelays = (allTasks: Task[], changedTask: Task): Task[] => {
@@ -467,7 +452,6 @@ const AppContent: React.FC = () => {
                 
                 if (result.settings) {
                     await saveSettings(result.settings);
-                    if (result.settings.userName) setUserName(result.settings.userName);
                 }
                 showToast(t.dataImported);
             } else {
@@ -721,7 +705,7 @@ const AppContent: React.FC = () => {
                         onClick={() => setShowProfileMenu(!showProfileMenu)} 
                         className="h-8 w-8 bg-slate-200 hover:bg-slate-300 rounded-full flex items-center justify-center text-slate-500 font-bold border border-slate-300 transition-colors"
                    >
-                        {getInitials(userName)}
+                        {getInitials(currentUser?.name || 'User')}
                    </button>
                    
                    {showProfileMenu && (
@@ -729,29 +713,6 @@ const AppContent: React.FC = () => {
                            <div className="p-4 border-b border-slate-100 bg-slate-50">
                                <p className="text-xs text-slate-500 font-medium uppercase mb-1">{t.userProfile}</p>
                                <p className="text-sm text-slate-700 font-medium truncate">{currentUser?.name || 'User'}</p>
-                               {isEditingName ? (
-                                   <div className="flex gap-2 mt-2">
-                                       <input 
-                                           autoFocus
-                                           className="w-full text-sm border border-blue-300 rounded px-2 py-1 outline-none bg-white text-slate-800"
-                                           value={tempName}
-                                           onChange={(e) => setTempName(e.target.value)}
-                                           onKeyDown={(e) => e.key === 'Enter' && saveUserName()}
-                                           placeholder="Name"
-                                       />
-                                       <button onClick={saveUserName} className="text-green-600"><CheckCircle size={16}/></button>
-                                   </div>
-                               ) : (
-                                   <div className="flex justify-between items-center group mt-1">
-                                       <p className="text-xs text-slate-500 truncate">昵称: {userName}</p>
-                                       <button 
-                                           onClick={() => { setIsEditingName(true); setTempName(userName); }}
-                                           className="text-slate-400 hover:text-blue-600"
-                                        >
-                                           <Edit2 size={12} />
-                                       </button>
-                                   </div>
-                               )}
                            </div>
                            <div className="p-2">
                                {currentUser?.role === 'admin' && (
