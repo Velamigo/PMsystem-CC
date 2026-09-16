@@ -2,10 +2,18 @@
 import { supabase } from './supabaseClient';
 import { Project, Task, TaskStatus, TaskPriority, AppNotification, Milestone, AppSettings, ProjectStatus } from '../types';
 
-// Get current user ID
+// Get current user ID from localStorage (custom auth system)
 export const getCurrentUserId = async (): Promise<string | null> => {
-  const { data: { user } } = await supabase.auth.getUser();
-  return user?.id || null;
+  try {
+    const userStr = localStorage.getItem('currentUser');
+    if (userStr) {
+      const user = JSON.parse(userStr);
+      return user?.id || null;
+    }
+  } catch (e) {
+    console.error('Failed to get current user from localStorage:', e);
+  }
+  return null;
 };
 
 // ============ Projects ============

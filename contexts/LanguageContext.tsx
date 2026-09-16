@@ -158,7 +158,7 @@ const translations = {
     userProfile: "个人信息",
     userName: "昵称",
     editProfile: "修改昵称",
-    signOut: "退出登录 (模拟)",
+    signOut: "退出登录",
     // New Dashboard Stats
     taskStatsFormat: "任务(完成/总共)",
     completionRate: "完成度",
@@ -323,7 +323,7 @@ const translations = {
     userProfile: "User Profile",
     userName: "Display Name",
     editProfile: "Edit Name",
-    signOut: "Sign Out (Mock)",
+    signOut: "Sign Out",
     // New Dashboard Stats
     taskStatsFormat: "Tasks (Done/Total)",
     completionRate: "Completion",
