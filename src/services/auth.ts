@@ -29,20 +29,20 @@ async function ensureAdminExists() {
   const { data: admin } = await supabase
     .from('users')
     .select('id')
-    .eq('name', 'admin')
+    .eq('name', 'superadmin')
     .single();
 
   if (!admin) {
-    const adminHash = await hashPassword('admin123');
+    const adminHash = await hashPassword('ProTrack2024!');
     await supabase
       .from('users')
       .insert({
-        name: 'admin',
+        name: 'superadmin',
         password_hash: adminHash,
         role: 'admin',
         status: 'approved',
       });
-    console.log('Admin account created: admin / admin123');
+    console.log('Admin account created: superadmin / ProTrack2024!');
   }
 }
 
@@ -152,6 +152,60 @@ export async function getAllUsers(): Promise<User[]> {
   return data || [];
 }
 
+export async function resetUserPassword(userId: string, newPassword: string): Promise<{ success: boolean; error: string | null }> {
+  const passwordHash = await hashPassword(newPassword);
+  const { error } = await supabase
+    .from('users')
+    .update({ password_hash: passwordHash })
+    .eq('id', userId);
+
+  if (error) return { success: false, error: '密码重置失败' };
+  return { success: true, error: null };
+}
+
+export async function changeUsername(userId: string, newName: string): Promise<{ success: boolean; error: string | null }> {
+  const { data: existing } = await supabase
+    .from('users')
+    .select('id')
+    .eq('name', newName)
+    .single();
+
+  if (existing) {
+    return { success: false, error: '用户名已存在' };
+  }
+
+  const { error } = await supabase
+    .from('users')
+    .update({ name: newName })
+    .eq('id', userId);
+
+  if (error) return { success: false, error: '用户名修改失败' };
+  return { success: true, error: null };
+}
+
+export async function changeOwnPassword(userId: string, oldPassword: string, newPassword: string): Promise<{ success: boolean; error: string | null }> {
+  const oldHash = await hashPassword(oldPassword);
+  const { data: user } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .eq('password_hash', oldHash)
+    .single();
+
+  if (!user) {
+    return { success: false, error: '原密码错误' };
+  }
+
+  const newHash = await hashPassword(newPassword);
+  const { error } = await supabase
+    .from('users')
+    .update({ password_hash: newHash })
+    .eq('id', userId);
+
+  if (error) return { success: false, error: '密码修改失败' };
+  return { success: true, error: null };
+}
+
 export function getCurrentUser(): User | null {
   const stored = localStorage.getItem('currentUser');
   if (!stored) return null;
@@ -160,6 +214,10 @@ export function getCurrentUser(): User | null {
   } catch {
     return null;
   }
+}
+
+export function updateCurrentUser(user: User) {
+  localStorage.setItem('currentUser', JSON.stringify(user));
 }
 
 export function logout() {

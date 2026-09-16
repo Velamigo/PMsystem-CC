@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Project, Task, ViewState, TaskStatus, AppNotification, Milestone, ProjectStatus, AppSettings } from './types';
 import { getProjects, saveProjects, getNotifications, addNotification, markNotificationRead, checkDeadlines, createProject, duplicateProject, deleteProject, hardDeleteProject, addMilestone, updateMilestone, deleteMilestone, setProjectStatus, generateBackupData, getSettings, saveSettings, importData, exportData, updateProject } from './services/supabaseService';
-import { getCurrentUser, logout, type User as AuthUser } from './src/services/auth';
+import { getCurrentUser, logout, changeOwnPassword, updateCurrentUser, type User as AuthUser } from './src/services/auth';
 import { exportToExcelDB, importFromExcelDB, generateExcelBuffer } from './services/excelService';
 import { Dashboard } from './components/Dashboard';
 import { ProjectDetail } from './components/ProjectDetail';
@@ -13,7 +13,7 @@ import { NotificationList } from './components/NotificationList';
 import { GlobalTaskList } from './components/GlobalTaskList';
 import LoginPage from './src/components/LoginPage';
 import AdminPanel from './src/components/AdminPanel';
-import { Bell, Calendar, Layout, Globe, Download, Upload, Settings, Trash2, X, RefreshCw, AlertTriangle, LogOut, Edit2, CheckCircle, Database, Shield } from 'lucide-react';
+import { Bell, Calendar, Layout, Globe, Download, Upload, Settings, Trash2, X, RefreshCw, AlertTriangle, LogOut, Edit2, CheckCircle, Database, Shield, Key } from 'lucide-react';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 
 const AppContent: React.FC = () => {
@@ -26,6 +26,10 @@ const AppContent: React.FC = () => {
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showPasswordChange, setShowPasswordChange] = useState(false);
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [passwordMsg, setPasswordMsg] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const [loading, setLoading] = useState(true);
   
   // User Profile State
@@ -109,6 +113,26 @@ const AppContent: React.FC = () => {
       setUserName(user.name);
       setLoading(true);
     }
+  };
+
+  const handlePasswordChange = async () => {
+    if (!currentUser) return;
+    setPasswordMsg(null);
+    const { success, error } = await changeOwnPassword(currentUser.id, oldPassword, newPassword);
+    if (success) {
+      setPasswordMsg({ msg: '密码修改成功', type: 'success' });
+      setOldPassword('');
+      setNewPassword('');
+      setTimeout(() => { setShowPasswordChange(false); setPasswordMsg(null); }, 2000);
+    } else {
+      setPasswordMsg({ msg: error || '修改失败', type: 'error' });
+    }
+  };
+
+  const handleUpdateCurrentUser = (user: AuthUser) => {
+    updateCurrentUser(user);
+    setCurrentUser(user);
+    setUserName(user.name);
   };
 
   // Auto Backup Logic
@@ -731,15 +755,22 @@ const AppContent: React.FC = () => {
                            </div>
                            <div className="p-2">
                                {currentUser?.role === 'admin' && (
-                                   <button 
-                                        onClick={() => { setShowAdminPanel(true); setShowProfileMenu(false); }}
-                                        className="w-full flex items-center px-3 py-2 text-sm text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                                    >
-                                        <Shield size={16} className="mr-2" />
-                                        用户管理
-                                    </button>
+                                    <button 
+                                         onClick={() => { setShowAdminPanel(true); setShowProfileMenu(false); }}
+                                         className="w-full flex items-center px-3 py-2 text-sm text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                                     >
+                                         <Shield size={16} className="mr-2" />
+                                         人员管理
+                                     </button>
                                )}
                                <button 
+                                    onClick={() => { setShowPasswordChange(true); setShowProfileMenu(false); }}
+                                    className="w-full flex items-center px-3 py-2 text-sm text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
+                                >
+                                    <Key size={16} className="mr-2" />
+                                    修改密码
+                                </button>
+                                <button 
                                     onClick={() => { setViewState({ type: 'SETTINGS' }); setShowProfileMenu(false); }}
                                     className="w-full flex items-center px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-blue-600 rounded-lg transition-colors"
                                 >
@@ -862,7 +893,58 @@ const AppContent: React.FC = () => {
 
       {/* Admin Panel Modal */}
       {showAdminPanel && currentUser?.role === 'admin' && (
-        <AdminPanel onClose={() => setShowAdminPanel(false)} />
+        <AdminPanel onClose={() => setShowAdminPanel(false)} onUpdateCurrentUser={handleUpdateCurrentUser} />
+      )}
+
+      {/* Password Change Modal */}
+      {showPasswordChange && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900">修改密码</h3>
+              <button onClick={() => { setShowPasswordChange(false); setOldPassword(''); setNewPassword(''); setPasswordMsg(null); }} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            {passwordMsg && (
+              <div className={`mb-4 px-4 py-3 rounded-lg text-sm font-medium ${passwordMsg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                {passwordMsg.msg}
+              </div>
+            )}
+            <div className="space-y-3">
+              <input
+                type="password"
+                value={oldPassword}
+                onChange={(e) => setOldPassword(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="输入原密码"
+              />
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="输入新密码（至少6位）"
+                onKeyDown={(e) => e.key === 'Enter' && handlePasswordChange()}
+              />
+            </div>
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => { setShowPasswordChange(false); setOldPassword(''); setNewPassword(''); setPasswordMsg(null); }}
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handlePasswordChange}
+                disabled={oldPassword.length < 1 || newPassword.length < 6}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                确认修改
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
