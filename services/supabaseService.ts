@@ -356,7 +356,6 @@ export const getSettings = async (): Promise<AppSettings> => {
 
   if (error || !data) {
     return {
-      userName: 'User',
       commonTags: ['Bug', 'Feature', 'Design', 'Backend', 'Frontend', 'Urgent'],
       commonAssignees: ['Alice', 'Bob', 'Charlie', 'David'],
       commonRequesters: ['Product Manager', 'CEO', 'Client A', 'Client B'],

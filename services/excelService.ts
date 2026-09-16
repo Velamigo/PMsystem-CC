@@ -129,7 +129,6 @@ const createWorkbook = (projects: Project[]) => {
   // 4. Settings Table
   const currentSettings = getSettings();
   const settingRows: SettingRow[] = [
-      { key: 'userName', value: currentSettings.userName || '' },
       { key: 'commonTags', value: JSON.stringify(currentSettings.commonTags) },
       { key: 'commonAssignees', value: JSON.stringify(currentSettings.commonAssignees) },
       { key: 'commonRequesters', value: JSON.stringify(currentSettings.commonRequesters) },
