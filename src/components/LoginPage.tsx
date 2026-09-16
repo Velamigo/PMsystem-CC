@@ -120,13 +120,6 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
           </button>
         </div>
 
-        {isLogin && (
-          <div className="mt-4 p-3 bg-blue-50 rounded-lg text-sm text-blue-700">
-            <p className="font-medium">默认管理员账号：</p>
-            <p>用户名：admin</p>
-            <p>密码：admin123</p>
-          </div>
-        )}
       </div>
     </div>
   );
