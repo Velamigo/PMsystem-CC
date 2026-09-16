@@ -1,6 +1,12 @@
 // 认证服务 - 通过 Edge Function 调用
 
 const EDGE_FUNCTION_URL = 'https://bqhnrmcrcvsmrxyxdymx.supabase.co/functions/v1/api-proxy';
+const ANON_KEY = 'sb_publishable_o3pPNc1c-kEe_RyvC79OEg_6lb0wGmu';
+
+const AUTH_HEADERS = {
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${ANON_KEY}`,
+};
 
 export interface User {
   id: string;
@@ -42,7 +48,7 @@ async function verifyPassword(password: string, storedHash: string): Promise<boo
 async function ensureAdminExists() {
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'getAllUsers',
       params: {},
@@ -60,7 +66,7 @@ async function ensureAdminExists() {
     const adminHash = await hashPasswordWithSalt('ProTrack2024!');
     await fetch(EDGE_FUNCTION_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: AUTH_HEADERS,
       body: JSON.stringify({
         operation: 'register',
         params: {
@@ -82,7 +88,7 @@ export async function login(name: string, password: string): Promise<{ user: Use
 
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'login',
       params: { name },
@@ -125,7 +131,7 @@ export async function register(name: string, password: string): Promise<{ succes
 
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'register',
       params: { name, passwordHash },
@@ -145,7 +151,7 @@ export async function register(name: string, password: string): Promise<{ succes
 export async function getPendingUsers(): Promise<User[]> {
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'getPendingUsers',
       params: {},
@@ -161,7 +167,7 @@ export async function getPendingUsers(): Promise<User[]> {
 export async function approveUser(userId: string): Promise<boolean> {
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'approveUser',
       params: { userId },
@@ -176,7 +182,7 @@ export async function approveUser(userId: string): Promise<boolean> {
 export async function rejectUser(userId: string): Promise<boolean> {
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'rejectUser',
       params: { userId },
@@ -191,7 +197,7 @@ export async function rejectUser(userId: string): Promise<boolean> {
 export async function getAllUsers(): Promise<User[]> {
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'getAllUsers',
       params: {},
@@ -208,7 +214,7 @@ export async function resetUserPassword(userId: string, newPassword: string): Pr
   const passwordHash = await hashPasswordWithSalt(newPassword);
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'resetUserPassword',
       params: { userId, passwordHash },
@@ -224,7 +230,7 @@ export async function resetUserPassword(userId: string, newPassword: string): Pr
 export async function changeUsername(userId: string, newName: string): Promise<{ success: boolean; error: string | null }> {
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'changeUsername',
       params: { userId, newName },
@@ -240,7 +246,7 @@ export async function changeUsername(userId: string, newName: string): Promise<{
 export async function deleteUser(userId: string): Promise<{ success: boolean; error: string | null }> {
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'deleteUser',
       params: { userId },
@@ -257,7 +263,7 @@ export async function changeOwnPassword(userId: string, oldPassword: string, new
   // 先获取用户信息验证旧密码
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'login',
       params: { name: getCurrentUserName() },
@@ -279,7 +285,7 @@ export async function changeOwnPassword(userId: string, oldPassword: string, new
   const newHash = await hashPasswordWithSalt(newPassword);
   const updateResponse = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: AUTH_HEADERS,
     body: JSON.stringify({
       operation: 'resetUserPassword',
       params: { userId, passwordHash: newHash },
