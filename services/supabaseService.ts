@@ -2,6 +2,12 @@
 import { supabase } from './supabaseClient';
 import { Project, Task, TaskStatus, TaskPriority, AppNotification, Milestone, AppSettings, ProjectStatus } from '../types';
 
+// Get current user ID
+export const getCurrentUserId = async (): Promise<string | null> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  return user?.id || null;
+};
+
 // ============ Projects ============
 
 export const getProjects = async (): Promise<Project[]> => {
@@ -76,7 +82,6 @@ export const getProjects = async (): Promise<Project[]> => {
 };
 
 export const saveProjects = async (projects: Project[]): Promise<void> => {
-  // This is a bulk save - used for import. For individual updates, use updateProject.
   for (const project of projects) {
     await updateProject(project);
   }
@@ -95,9 +100,10 @@ export const updateProject = async (updatedProject: Project): Promise<void> => {
 };
 
 export const createProject = async (name: string, description: string): Promise<Project[]> => {
+  const userId = await getCurrentUserId();
   const { data, error } = await supabase
     .from('projects')
-    .insert({ name, description, status: ProjectStatus.ACTIVE })
+    .insert({ name, description, status: ProjectStatus.ACTIVE, user_id: userId })
     .select()
     .single();
 
@@ -107,6 +113,7 @@ export const createProject = async (name: string, description: string): Promise<
 };
 
 export const duplicateProject = async (projectId: string, copySuffix: string): Promise<Project[]> => {
+  const userId = await getCurrentUserId();
   const projects = await getProjects();
   const source = projects.find(p => p.id === projectId);
   if (!source) return projects;
@@ -117,13 +124,13 @@ export const duplicateProject = async (projectId: string, copySuffix: string): P
       name: `${source.name}${copySuffix}`,
       description: source.description,
       status: ProjectStatus.ACTIVE,
+      user_id: userId,
     })
     .select()
     .single();
 
   if (error) throw error;
 
-  // Duplicate tasks
   const taskIdMap = new Map<string, string>();
   for (const task of source.tasks) {
     const newTaskId = crypto.randomUUID();
@@ -132,6 +139,7 @@ export const duplicateProject = async (projectId: string, copySuffix: string): P
     await supabase.from('tasks').insert({
       id: newTaskId,
       project_id: newProject.id,
+      user_id: userId,
       title: task.title,
       description: task.description,
       status: TaskStatus.TODO,
@@ -144,11 +152,11 @@ export const duplicateProject = async (projectId: string, copySuffix: string): P
       dependencies: task.dependencies.map(depId => taskIdMap.get(depId) || depId),
     });
 
-    // Duplicate subtasks
     for (const subtask of task.subtasks) {
       await supabase.from('subtasks').insert({
         id: crypto.randomUUID(),
         task_id: newTaskId,
+        user_id: userId,
         title: subtask.title,
         completed: false,
         assignee: subtask.assignee,
@@ -157,11 +165,11 @@ export const duplicateProject = async (projectId: string, copySuffix: string): P
     }
   }
 
-  // Duplicate milestones
   for (const milestone of source.milestones) {
     await supabase.from('milestones').insert({
       id: crypto.randomUUID(),
       project_id: newProject.id,
+      user_id: userId,
       title: milestone.title,
       date: milestone.date,
       completed: false,
@@ -195,9 +203,11 @@ export const setProjectStatus = async (projectId: string, status: ProjectStatus)
 // ============ Milestones ============
 
 export const addMilestone = async (projectId: string, milestone: Milestone): Promise<Project[]> => {
+  const userId = await getCurrentUserId();
   await supabase.from('milestones').insert({
     id: milestone.id,
     project_id: projectId,
+    user_id: userId,
     title: milestone.title,
     date: milestone.date,
     completed: milestone.completed,
@@ -240,11 +250,12 @@ export const getNotifications = async (): Promise<AppNotification[]> => {
 };
 
 export const saveNotifications = async (notifications: AppNotification[]): Promise<void> => {
-  // Clear existing and re-insert
+  const userId = await getCurrentUserId();
   await supabase.from('notifications').delete().neq('id', '00000000-0000-0000-0000-000000000000');
   for (const notif of notifications) {
     await supabase.from('notifications').insert({
       id: notif.id,
+      user_id: userId,
       title: notif.title,
       message: notif.message,
       type: notif.type,
@@ -256,6 +267,7 @@ export const saveNotifications = async (notifications: AppNotification[]): Promi
 };
 
 export const addNotification = async (notification: AppNotification): Promise<AppNotification[]> => {
+  const userId = await getCurrentUserId();
   const current = await getNotifications();
   const exists = current.some(n =>
     n.type === notification.type &&
@@ -267,6 +279,7 @@ export const addNotification = async (notification: AppNotification): Promise<Ap
   if (!exists) {
     await supabase.from('notifications').insert({
       id: notification.id,
+      user_id: userId,
       title: notification.title,
       message: notification.message,
       type: notification.type,
@@ -335,7 +348,7 @@ export const getSettings = async (): Promise<AppSettings> => {
 
   if (error || !data) {
     return {
-      userName: 'John Doe',
+      userName: 'User',
       commonTags: ['Bug', 'Feature', 'Design', 'Backend', 'Frontend', 'Urgent'],
       commonAssignees: ['Alice', 'Bob', 'Charlie', 'David'],
       commonRequesters: ['Product Manager', 'CEO', 'Client A', 'Client B'],
@@ -347,9 +360,10 @@ export const getSettings = async (): Promise<AppSettings> => {
 };
 
 export const saveSettings = async (settings: AppSettings): Promise<void> => {
+  const userId = await getCurrentUserId();
   await supabase
     .from('settings')
-    .upsert({ key: 'app_settings', value: settings });
+    .upsert({ key: 'app_settings', user_id: userId, value: settings });
 };
 
 // ============ Backup / Import / Export ============
@@ -382,6 +396,7 @@ export const exportData = async (): Promise<void> => {
 };
 
 export const importData = async (file: File): Promise<{ projects: Project[]; settings?: AppSettings } | null> => {
+  const userId = await getCurrentUserId();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -413,12 +428,12 @@ export const importData = async (file: File): Promise<{ projects: Project[]; set
           throw new Error('Invalid backup format: No projects array found.');
         }
 
-        // Save projects to Supabase
         for (const project of loadedProjects) {
           await supabase
             .from('projects')
             .upsert({
               id: project.id,
+              user_id: userId,
               name: project.name,
               description: project.description,
               status: project.status,
@@ -432,6 +447,7 @@ export const importData = async (file: File): Promise<{ projects: Project[]; set
               .upsert({
                 id: task.id,
                 project_id: task.projectId,
+                user_id: userId,
                 title: task.title,
                 description: task.description,
                 status: task.status,
@@ -451,6 +467,7 @@ export const importData = async (file: File): Promise<{ projects: Project[]; set
                 .upsert({
                   id: subtask.id,
                   task_id: task.id,
+                  user_id: userId,
                   title: subtask.title,
                   completed: subtask.completed,
                   assignee: subtask.assignee,
@@ -465,6 +482,7 @@ export const importData = async (file: File): Promise<{ projects: Project[]; set
               .upsert({
                 id: milestone.id,
                 project_id: project.id,
+                user_id: userId,
                 title: milestone.title,
                 date: milestone.date,
                 completed: milestone.completed,

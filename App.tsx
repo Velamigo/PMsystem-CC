@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Project, Task, ViewState, TaskStatus, AppNotification, Milestone, ProjectStatus, AppSettings } from './types';
 import { getProjects, saveProjects, getNotifications, addNotification, markNotificationRead, checkDeadlines, createProject, duplicateProject, deleteProject, hardDeleteProject, addMilestone, updateMilestone, deleteMilestone, setProjectStatus, generateBackupData, getSettings, saveSettings, importData, exportData, updateProject } from './services/supabaseService';
+import { supabase } from './services/supabaseClient';
 import { exportToExcelDB, importFromExcelDB, generateExcelBuffer } from './services/excelService';
 import { Dashboard } from './components/Dashboard';
 import { ProjectDetail } from './components/ProjectDetail';
@@ -10,6 +11,7 @@ import { CalendarView } from './components/CalendarView';
 import { SettingsPage } from './components/SettingsPage';
 import { NotificationList } from './components/NotificationList';
 import { GlobalTaskList } from './components/GlobalTaskList';
+import { LoginPage } from './components/LoginPage';
 import { Bell, Calendar, Layout, Globe, Download, Upload, Settings, Trash2, X, RefreshCw, AlertTriangle, User, LogOut, Edit2, CheckCircle, FileSpreadsheet, Database } from 'lucide-react';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 
@@ -18,6 +20,8 @@ const AppContent: React.FC = () => {
   const [viewState, setViewState] = useState<ViewState>({ type: 'DASHBOARD' });
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUserEmail, setCurrentUserEmail] = useState('');
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -40,8 +44,35 @@ const AppContent: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { language, setLanguage, t } = useLanguage();
 
-  // Load data on mount
+  // Auth state listener
   useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setIsAuthenticated(true);
+        setCurrentUserEmail(session.user.email || '');
+        setUserName(session.user.email?.split('@')[0] || 'User');
+      } else {
+        setIsAuthenticated(false);
+        setCurrentUserEmail('');
+      }
+    });
+
+    // Check initial auth state
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setIsAuthenticated(true);
+        setCurrentUserEmail(session.user.email || '');
+        setUserName(session.user.email?.split('@')[0] || 'User');
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Load data on mount (only when authenticated)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
     const loadData = async () => {
       try {
         const data = await getProjects();
@@ -73,7 +104,22 @@ const AppContent: React.FC = () => {
       }
     };
     loadData();
-  }, []);
+  }, [isAuthenticated]);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setIsAuthenticated(false);
+    setCurrentUserEmail('');
+    setProjects([]);
+    setNotifications([]);
+  };
+
+  const handleLogin = (email: string) => {
+    setCurrentUserEmail(email);
+    setIsAuthenticated(true);
+    setUserName(email.split('@')[0]);
+    setLoading(true);
+  };
 
   // Auto Backup Logic
   useEffect(() => {
@@ -529,6 +575,11 @@ const AppContent: React.FC = () => {
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
+  // Show login page if not authenticated
+  if (!isAuthenticated) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -663,8 +714,9 @@ const AppContent: React.FC = () => {
                        <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 z-50 animate-fade-in overflow-hidden">
                            <div className="p-4 border-b border-slate-100 bg-slate-50">
                                <p className="text-xs text-slate-500 font-medium uppercase mb-1">{t.userProfile}</p>
+                               <p className="text-sm text-slate-700 font-medium truncate">{currentUserEmail}</p>
                                {isEditingName ? (
-                                   <div className="flex gap-2">
+                                   <div className="flex gap-2 mt-2">
                                        <input 
                                            autoFocus
                                            className="w-full text-sm border border-blue-300 rounded px-2 py-1 outline-none bg-white text-slate-800"
@@ -676,8 +728,8 @@ const AppContent: React.FC = () => {
                                        <button onClick={saveUserName} className="text-green-600"><CheckCircle size={16}/></button>
                                    </div>
                                ) : (
-                                   <div className="flex justify-between items-center group">
-                                       <p className="font-bold text-slate-800 truncate">{userName}</p>
+                                   <div className="flex justify-between items-center group mt-1">
+                                       <p className="text-xs text-slate-500 truncate">昵称: {userName}</p>
                                        <button 
                                            onClick={() => { setIsEditingName(true); setTempName(userName); }}
                                            className="text-slate-400 hover:text-blue-600"
@@ -696,6 +748,7 @@ const AppContent: React.FC = () => {
                                     {t.settings}
                                 </button>
                                 <button 
+                                    onClick={handleLogout}
                                     className="w-full flex items-center px-3 py-2 text-sm text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                                 >
                                     <LogOut size={16} className="mr-2" />
