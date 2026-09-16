@@ -1,0 +1,13 @@
+
+/* @tailwind directives removed to rely on CDN for stability in preview */
+
+body { 
+    font-family: 'Inter', sans-serif; 
+    background-color: #f8fafc; 
+}
+
+/* Custom scrollbar for task lists */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
