@@ -1,13 +1,6 @@
-import { createClient } from '@supabase/supabase-js';
+// 认证服务 - 通过 Edge Function 调用
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing Supabase environment variables');
-}
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const EDGE_FUNCTION_URL = 'https://bqhnrmcrcvsmrxyxdymx.supabase.co/functions/v1/api-proxy';
 
 export interface User {
   id: string;
@@ -15,20 +8,20 @@ export interface User {
   role: 'admin' | 'user';
   status: 'approved' | 'pending' | 'rejected';
   created_at: string;
+  password_hash?: string;
 }
 
-// Generate a random salt
+// 生成随机盐
 function generateSalt(): string {
   const array = new Uint8Array(16);
   crypto.getRandomValues(array);
   return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Hash password with salt: returns "salt:hash"
+// 密码加盐哈希
 async function hashPasswordWithSalt(password: string, salt?: string): Promise<string> {
   const actualSalt = salt || generateSalt();
   const encoder = new TextEncoder();
-  // Combine salt + password for hashing
   const data = encoder.encode(actualSalt + password);
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
@@ -36,7 +29,7 @@ async function hashPasswordWithSalt(password: string, salt?: string): Promise<st
   return `${actualSalt}:${hash}`;
 }
 
-// Verify password against stored "salt:hash"
+// 验证密码
 async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
   const parts = storedHash.split(':');
   if (parts.length !== 2) return false;
@@ -45,204 +38,260 @@ async function verifyPassword(password: string, storedHash: string): Promise<boo
   return newHash === storedHash;
 }
 
+// 确保管理员存在
 async function ensureAdminExists() {
-  const { data: admin } = await supabase
-    .from('users')
-    .select('id')
-    .eq('role', 'admin')
-    .single();
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'getAllUsers',
+      params: {},
+      authToken: 'system',
+    }),
+  });
+  const result = await response.json();
 
-  if (!admin) {
+  if (result.error || !result.data) return;
+
+  const users = result.data as User[];
+  const hasAdmin = users.some(u => u.role === 'admin');
+
+  if (!hasAdmin) {
     const adminHash = await hashPasswordWithSalt('ProTrack2024!');
-    await supabase
-      .from('users')
-      .insert({
-        name: 'superadmin',
-        password_hash: adminHash,
-        role: 'admin',
-        status: 'approved',
-      });
+    await fetch(EDGE_FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'register',
+        params: {
+          name: 'superadmin',
+          passwordHash: adminHash,
+          role: 'admin',
+          status: 'approved',
+        },
+        authToken: 'system',
+      }),
+    });
     console.log('Admin account created: superadmin / ProTrack2024!');
   }
 }
 
+// 登录
 export async function login(name: string, password: string): Promise<{ user: User | null; error: string | null }> {
   await ensureAdminExists();
 
-  const { data, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('name', name)
-    .single();
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'login',
+      params: { name },
+      authToken: 'system',
+    }),
+  });
+  const result = await response.json();
 
-  if (error || !data) {
+  if (result.error || !result.data) {
     return { user: null, error: '用户名或密码错误' };
   }
 
-  // Verify password with salt
-  const isValid = await verifyPassword(password, data.password_hash);
+  const user = result.data as User;
+
+  // 验证密码
+  const isValid = await verifyPassword(password, user.password_hash);
   if (!isValid) {
     return { user: null, error: '用户名或密码错误' };
   }
 
-  if (data.status === 'pending') {
+  if (user.status === 'pending') {
     return { user: null, error: '账号待审批，请等待管理员批准' };
   }
 
-  if (data.status === 'rejected') {
+  if (user.status === 'rejected') {
     return { user: null, error: '账号已被拒绝' };
   }
 
-  const user: User = {
-    id: data.id,
-    name: data.name,
-    role: data.role,
-    status: data.status,
-    created_at: data.created_at,
-  };
-
-  localStorage.setItem('currentUser', JSON.stringify(user));
-  return { user, error: null };
+  // 不返回密码哈希
+  const { password_hash, ...safeUser } = user;
+  localStorage.setItem('currentUser', JSON.stringify(safeUser));
+  return { user: safeUser, error: null };
 }
 
+// 注册
 export async function register(name: string, password: string): Promise<{ success: boolean; error: string | null }> {
   await ensureAdminExists();
 
-  const { data: existing } = await supabase
-    .from('users')
-    .select('id')
-    .eq('name', name)
-    .single();
-
-  if (existing) {
-    return { success: false, error: '用户名已存在' };
-  }
-
   const passwordHash = await hashPasswordWithSalt(password);
 
-  const { error } = await supabase
-    .from('users')
-    .insert({
-      name,
-      password_hash: passwordHash,
-      role: 'user',
-      status: 'pending',
-    });
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'register',
+      params: { name, passwordHash },
+      authToken: 'system',
+    }),
+  });
+  const result = await response.json();
 
-  if (error) {
-    return { success: false, error: '注册失败，请重试' };
-  }
-
-  return { success: true, error: null };
-}
-
-export async function getPendingUsers(): Promise<User[]> {
-  const { data, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
-
-  if (error) return [];
-  return data || [];
-}
-
-export async function approveUser(userId: string): Promise<boolean> {
-  const { error } = await supabase
-    .from('users')
-    .update({ status: 'approved' })
-    .eq('id', userId);
-
-  return !error;
-}
-
-export async function rejectUser(userId: string): Promise<boolean> {
-  const { error } = await supabase
-    .from('users')
-    .update({ status: 'rejected' })
-    .eq('id', userId);
-
-  return !error;
-}
-
-export async function getAllUsers(): Promise<User[]> {
-  const { data, error } = await supabase
-    .from('users')
-    .select('*')
-    .order('created_at', { ascending: false });
-
-  if (error) return [];
-  return data || [];
-}
-
-export async function resetUserPassword(userId: string, newPassword: string): Promise<{ success: boolean; error: string | null }> {
-  const passwordHash = await hashPasswordWithSalt(newPassword);
-  const { error } = await supabase
-    .from('users')
-    .update({ password_hash: passwordHash })
-    .eq('id', userId);
-
-  if (error) return { success: false, error: '密码重置失败' };
-  return { success: true, error: null };
-}
-
-export async function changeUsername(userId: string, newName: string): Promise<{ success: boolean; error: string | null }> {
-  const { data: existing } = await supabase
-    .from('users')
-    .select('id')
-    .eq('name', newName)
-    .single();
-
-  if (existing) {
+  if (result.error) {
     return { success: false, error: '用户名已存在' };
   }
 
-  const { error } = await supabase
-    .from('users')
-    .update({ name: newName })
-    .eq('id', userId);
-
-  if (error) return { success: false, error: '用户名修改失败' };
   return { success: true, error: null };
 }
 
+// 获取待审批用户
+export async function getPendingUsers(): Promise<User[]> {
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'getPendingUsers',
+      params: {},
+      authToken: getCurrentUserId(),
+    }),
+  });
+  const result = await response.json();
+  if (result.error) return [];
+  return result.data || [];
+}
+
+// 审批用户
+export async function approveUser(userId: string): Promise<boolean> {
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'approveUser',
+      params: { userId },
+      authToken: getCurrentUserId(),
+    }),
+  });
+  const result = await response.json();
+  return !result.error;
+}
+
+// 拒绝用户
+export async function rejectUser(userId: string): Promise<boolean> {
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'rejectUser',
+      params: { userId },
+      authToken: getCurrentUserId(),
+    }),
+  });
+  const result = await response.json();
+  return !result.error;
+}
+
+// 获取所有用户
+export async function getAllUsers(): Promise<User[]> {
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'getAllUsers',
+      params: {},
+      authToken: getCurrentUserId(),
+    }),
+  });
+  const result = await response.json();
+  if (result.error) return [];
+  return result.data || [];
+}
+
+// 重置用户密码
+export async function resetUserPassword(userId: string, newPassword: string): Promise<{ success: boolean; error: string | null }> {
+  const passwordHash = await hashPasswordWithSalt(newPassword);
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'resetUserPassword',
+      params: { userId, passwordHash },
+      authToken: getCurrentUserId(),
+    }),
+  });
+  const result = await response.json();
+  if (result.error) return { success: false, error: '密码重置失败' };
+  return { success: true, error: null };
+}
+
+// 修改用户名
+export async function changeUsername(userId: string, newName: string): Promise<{ success: boolean; error: string | null }> {
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'changeUsername',
+      params: { userId, newName },
+      authToken: getCurrentUserId(),
+    }),
+  });
+  const result = await response.json();
+  if (result.error) return { success: false, error: result.error };
+  return { success: true, error: null };
+}
+
+// 删除用户
 export async function deleteUser(userId: string): Promise<{ success: boolean; error: string | null }> {
-  const { error } = await supabase
-    .from('users')
-    .delete()
-    .eq('id', userId);
-
-  if (error) return { success: false, error: '删除用户失败' };
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'deleteUser',
+      params: { userId },
+      authToken: getCurrentUserId(),
+    }),
+  });
+  const result = await response.json();
+  if (result.error) return { success: false, error: '删除用户失败' };
   return { success: true, error: null };
 }
 
+// 修改自己的密码
 export async function changeOwnPassword(userId: string, oldPassword: string, newPassword: string): Promise<{ success: boolean; error: string | null }> {
-  const { data: user } = await supabase
-    .from('users')
-    .select('*')
-    .eq('id', userId)
-    .single();
+  // 先获取用户信息验证旧密码
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'login',
+      params: { name: getCurrentUserName() },
+      authToken: 'system',
+    }),
+  });
+  const result = await response.json();
 
-  if (!user) {
+  if (result.error || !result.data) {
     return { success: false, error: '用户不存在' };
   }
 
-  // Verify old password with salt
+  const user = result.data as User;
   const isValid = await verifyPassword(oldPassword, user.password_hash);
   if (!isValid) {
     return { success: false, error: '原密码错误' };
   }
 
   const newHash = await hashPasswordWithSalt(newPassword);
-  const { error } = await supabase
-    .from('users')
-    .update({ password_hash: newHash })
-    .eq('id', userId);
-
-  if (error) return { success: false, error: '密码修改失败' };
+  const updateResponse = await fetch(EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'resetUserPassword',
+      params: { userId, passwordHash: newHash },
+      authToken: getCurrentUserId(),
+    }),
+  });
+  const updateResult = await updateResponse.json();
+  if (updateResult.error) return { success: false, error: '密码修改失败' };
   return { success: true, error: null };
 }
 
+// 获取当前用户
 export function getCurrentUser(): User | null {
   const stored = localStorage.getItem('currentUser');
   if (!stored) return null;
@@ -253,10 +302,25 @@ export function getCurrentUser(): User | null {
   }
 }
 
+// 更新当前用户
 export function updateCurrentUser(user: User) {
   localStorage.setItem('currentUser', JSON.stringify(user));
 }
 
+// 退出登录
 export function logout() {
   localStorage.removeItem('currentUser');
+}
+
+// 工具函数
+function getCurrentUserId(): string {
+  const user = getCurrentUser();
+  if (!user) throw new Error('Not logged in');
+  return user.id;
+}
+
+function getCurrentUserName(): string {
+  const user = getCurrentUser();
+  if (!user) throw new Error('Not logged in');
+  return user.name;
 }

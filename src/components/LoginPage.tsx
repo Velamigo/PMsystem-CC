@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { login, register } from '../services/auth';
+import { login, register, type User } from '../services/auth';
 
 interface LoginPageProps {
-  onLogin: () => void;
+  onLogin: (user: User) => void;
 }
 
 export default function LoginPage({ onLogin }: LoginPageProps) {
@@ -25,7 +25,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         if (error) {
           setError(error);
         } else if (user) {
-          onLogin();
+          onLogin(user);
         }
       } else {
         const { success, error } = await register(name, password);

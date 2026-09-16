@@ -70,8 +70,16 @@ const AppContent: React.FC = () => {
         const savedNotifications = await getNotifications();
         const safeSavedNotifications = Array.isArray(savedNotifications) ? savedNotifications : [];
         
+        // Get all tasks for deadline check
+        const allTasks: Task[] = [];
+        for (const project of safeData) {
+          if (project.tasks) {
+            allTasks.push(...project.tasks);
+          }
+        }
+        
         // Check deadlines returns array
-        const deadlineNotifications = await checkDeadlines(safeData);
+        const deadlineNotifications = await checkDeadlines(allTasks);
         
         // Combine if checkDeadlines returned new ones, otherwise use saved
         setNotifications(deadlineNotifications.length > safeSavedNotifications.length ? deadlineNotifications : safeSavedNotifications);
@@ -100,8 +108,7 @@ const AppContent: React.FC = () => {
     setNotifications([]);
   };
 
-  const handleLogin = () => {
-    const user = getCurrentUser();
+  const handleLogin = (user: AuthUser) => {
     if (user) {
       setCurrentUser(user);
       setIsAuthenticated(true);
@@ -421,8 +428,9 @@ const AppContent: React.FC = () => {
   };
 
   const handleDeleteMilestone = async (projectId: string, milestoneId: string) => {
-      const updated = await deleteMilestone(projectId, milestoneId);
-      setProjects(updated);
+      await deleteMilestone(milestoneId);
+      const newProjects = await getProjects();
+      setProjects(newProjects);
   };
 
   // --- Excel Database Functions ---
