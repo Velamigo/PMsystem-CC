@@ -2,7 +2,7 @@
 import { Project, Task, TaskStatus, TaskPriority, AppNotification, Milestone, AppSettings, ProjectStatus } from '../types';
 
 const EDGE_FUNCTION_URL = 'https://bqhnrmcrcvsmrxyxdymx.supabase.co/functions/v1/api-proxy';
-const ANON_KEY = 'sb_publishable_o3pPNc1c-kEe_RyvC79OEg_6lb0wGmu';
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxaG5ybWNyY3ZzbXJ4eXhkeW14Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1Mzg1MjEsImV4cCI6MjEwNTExNDUyMX0.sfLoW8sS1U12PK3kaplXPbwJOGkTGOuNfA3fSEGLyww';
 
 // 获取当前用户 ID
 export const getCurrentUserId = async (): Promise<string | null> => {
