@@ -2,7 +2,6 @@
 import { Project, Task, TaskStatus, TaskPriority, AppNotification, Milestone, AppSettings, ProjectStatus } from '../types';
 
 const EDGE_FUNCTION_URL = 'https://bqhnrmcrcvsmrxyxdymx.supabase.co/functions/v1/api-proxy';
-const ANON_KEY = 'sb_publishable_o3pPNc1c-kEe_RyvC79OEg_6lb0wGmu';
 
 // 获取当前用户 ID
 export const getCurrentUserId = async (): Promise<string | null> => {
@@ -27,7 +26,6 @@ async function callEdgeFunction(operation: string, params: any = {}): Promise<an
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${ANON_KEY}`,
     },
     body: JSON.stringify({
       operation,

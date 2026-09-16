@@ -1,90 +1,186 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+const ALLOWED_ORIGINS = [
+  'https://velamigo.github.io',
+  'http://localhost:5173',
+  'http://localhost:4173',
+]
+
+function getCorsHeaders(origin: string | null) {
+  const allowed = origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]
+  return {
+    'Access-Control-Allow-Origin': allowed,
+    'Access-Control-Allow-Headers': 'content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  }
+}
+
+// Generate random salt
+function generateSalt(): string {
+  const array = new Uint8Array(16)
+  crypto.getRandomValues(array)
+  return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+// Hash password with salt
+async function hashPassword(password: string, salt?: string): Promise<string> {
+  const actualSalt = salt || generateSalt()
+  const encoder = new TextEncoder()
+  const data = encoder.encode(actualSalt + password)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+  return `${actualSalt}:${hash}`
+}
+
+// Verify password
+async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  const parts = storedHash.split(':')
+  if (parts.length !== 2) return false
+  const [salt] = parts
+  const newHash = await hashPassword(password, salt)
+  return newHash === storedHash
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = getCorsHeaders(req.headers.get('origin'))
+
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
 
   try {
     const supabase = createClient(
-      Deno.env.get('DB_URL') ?? '',
-      Deno.env.get('SERVICE_ROLE_KEY') ?? ''
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
     const { operation, params, authToken } = await req.json()
 
-    // Verify auth token
-    if (!authToken) {
+    const publicOps = ['login', 'register', 'initAdmin']
+    const isPublic = publicOps.includes(operation)
+
+    let userId: string | null = null
+    let userRole: string | null = null
+
+    if (!isPublic) {
+      if (!authToken) {
+        return new Response(
+          JSON.stringify({ error: 'Not authenticated' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 401 }
+        )
+      }
+
+      const { data: user, error: userError } = await supabase
+        .from('users')
+        .select('id, name, role, status')
+        .eq('id', authToken)
+        .single()
+
+      if (userError || !user || user.status !== 'approved') {
+        return new Response(
+          JSON.stringify({ error: 'Not authenticated' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 401 }
+        )
+      }
+
+      userId = user.id
+      userRole = user.role
+    }
+
+    const adminOps = ['getPendingUsers', 'getAllUsers', 'approveUser', 'rejectUser', 'deleteUser', 'resetUserPassword', 'changeUsername']
+    if (adminOps.includes(operation) && userRole !== 'admin') {
       return new Response(
-        JSON.stringify({ error: 'Missing auth token' }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 401 }
+        JSON.stringify({ error: 'Admin access required' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 403 }
       )
     }
 
-    // Verify user exists and is approved
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('id, name, role, status')
-      .eq('id', authToken)
-      .single()
-
-    if (userError || !user || user.status !== 'approved') {
-      return new Response(
-        JSON.stringify({ error: 'Invalid or unauthorized user' }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 401 }
-      )
-    }
-
-    const userId = user.id
     let result
 
     switch (operation) {
-      // Users
-      case 'login':
+      case 'login': {
         const { data: loginData } = await supabase
           .from('users')
-          .select('*')
+          .select('id, name, role, status, password_hash, created_at')
           .eq('name', params.name)
           .single()
-        result = loginData
+        if (!loginData) {
+          result = null
+          break
+        }
+        const valid = await verifyPassword(params.password, loginData.password_hash)
+        if (!valid) {
+          result = null
+          break
+        }
+        const { password_hash, ...safeUser } = loginData
+        result = safeUser
         break
+      }
 
-      case 'register':
+      case 'register': {
+        const passwordHash = await hashPassword(params.password)
         const { data: regData, error: regError } = await supabase
           .from('users')
           .insert({
             name: params.name,
-            password_hash: params.passwordHash,
+            password_hash: passwordHash,
             role: 'user',
             status: 'pending',
           })
-          .select()
+          .select('id, name, role, status, created_at')
           .single()
         if (regError) throw regError
         result = regData
         break
+      }
 
-      case 'getPendingUsers':
+      case 'initAdmin': {
+        const { data: existingAdmins } = await supabase
+          .from('users')
+          .select('id')
+          .eq('role', 'admin')
+          .limit(1)
+        if (existingAdmins && existingAdmins.length > 0) {
+          result = { created: false }
+          break
+        }
+        const adminPassword = Deno.env.get('ADMIN_INIT_PASSWORD') ?? 'ProTrack2024!'
+        const adminHash = await hashPassword(adminPassword)
+        const { data: adminData, error: adminError } = await supabase
+          .from('users')
+          .insert({
+            name: 'superadmin',
+            password_hash: adminHash,
+            role: 'admin',
+            status: 'approved',
+          })
+          .select('id, name, role, status, created_at')
+          .single()
+        if (adminError) throw adminError
+        result = { created: true, admin: adminData }
+        break
+      }
+
+      case 'getPendingUsers': {
         const { data: pendingData } = await supabase
           .from('users')
-          .select('*')
+          .select('id, name, role, status, created_at')
           .eq('status', 'pending')
           .order('created_at', { ascending: false })
         result = pendingData || []
         break
+      }
 
-      case 'getAllUsers':
+      case 'getAllUsers': {
         const { data: allUsersData } = await supabase
           .from('users')
-          .select('*')
+          .select('id, name, role, status, created_at')
           .order('created_at', { ascending: false })
         result = allUsersData || []
         break
+      }
 
       case 'approveUser':
         await supabase.from('users').update({ status: 'approved' }).eq('id', params.userId)
@@ -96,17 +192,43 @@ Deno.serve(async (req) => {
         result = { success: true }
         break
 
-      case 'deleteUser':
+      case 'deleteUser': {
+        if (params.userId === userId) {
+          return new Response(
+            JSON.stringify({ error: '不能删除自己' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+          )
+        }
+        const { data: targetUser } = await supabase
+          .from('users')
+          .select('role')
+          .eq('id', params.userId)
+          .single()
+        if (targetUser?.role === 'admin') {
+          const { count } = await supabase
+            .from('users')
+            .select('id', { count: 'exact' })
+            .eq('role', 'admin')
+          if (count && count <= 1) {
+            return new Response(
+              JSON.stringify({ error: '不能删除最后一个管理员' }),
+              { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+            )
+          }
+        }
         await supabase.from('users').delete().eq('id', params.userId)
         result = { success: true }
         break
+      }
 
-      case 'resetUserPassword':
-        await supabase.from('users').update({ password_hash: params.passwordHash }).eq('id', params.userId)
+      case 'resetUserPassword': {
+        const passwordHash = await hashPassword(params.password)
+        await supabase.from('users').update({ password_hash: passwordHash }).eq('id', params.userId)
         result = { success: true }
         break
+      }
 
-      case 'changeUsername':
+      case 'changeUsername': {
         const { data: existingUser } = await supabase
           .from('users')
           .select('id')
@@ -121,9 +243,10 @@ Deno.serve(async (req) => {
         await supabase.from('users').update({ name: params.newName }).eq('id', params.userId)
         result = { success: true }
         break
+      }
 
       // Projects
-      case 'getProjects':
+      case 'getProjects': {
         const { data: projectsData } = await supabase
           .from('projects')
           .select('*')
@@ -131,8 +254,9 @@ Deno.serve(async (req) => {
           .order('created_at', { ascending: false })
         result = projectsData || []
         break
+      }
 
-      case 'saveProject':
+      case 'saveProject': {
         const { data: projectData } = await supabase
           .from('projects')
           .upsert({
@@ -148,6 +272,7 @@ Deno.serve(async (req) => {
           .single()
         result = projectData
         break
+      }
 
       case 'deleteProject':
         await supabase.from('projects').update({ deleted_at: new Date().toISOString() }).eq('id', params.projectId).eq('user_id', userId)
@@ -160,7 +285,7 @@ Deno.serve(async (req) => {
         break
 
       // Tasks
-      case 'getTasks':
+      case 'getTasks': {
         const { data: tasksData } = await supabase
           .from('tasks')
           .select('*')
@@ -168,8 +293,9 @@ Deno.serve(async (req) => {
           .order('created_at', { ascending: false })
         result = tasksData || []
         break
+      }
 
-      case 'saveTask':
+      case 'saveTask': {
         const { data: taskData } = await supabase
           .from('tasks')
           .upsert({
@@ -196,6 +322,7 @@ Deno.serve(async (req) => {
           .single()
         result = taskData
         break
+      }
 
       case 'deleteTask':
         await supabase.from('tasks').delete().eq('id', params.taskId).eq('user_id', userId)
@@ -203,7 +330,7 @@ Deno.serve(async (req) => {
         break
 
       // Milestones
-      case 'getMilestones':
+      case 'getMilestones': {
         const { data: milestonesData } = await supabase
           .from('milestones')
           .select('*')
@@ -211,8 +338,9 @@ Deno.serve(async (req) => {
           .order('created_at', { ascending: false })
         result = milestonesData || []
         break
+      }
 
-      case 'saveMilestone':
+      case 'saveMilestone': {
         const { data: milestoneData } = await supabase
           .from('milestones')
           .upsert({
@@ -229,6 +357,7 @@ Deno.serve(async (req) => {
           .single()
         result = milestoneData
         break
+      }
 
       case 'deleteMilestone':
         await supabase.from('milestones').delete().eq('id', params.milestoneId).eq('user_id', userId)
@@ -236,7 +365,7 @@ Deno.serve(async (req) => {
         break
 
       // Subtasks
-      case 'getSubtasks':
+      case 'getSubtasks': {
         const { data: subtasksData } = await supabase
           .from('subtasks')
           .select('*')
@@ -244,8 +373,9 @@ Deno.serve(async (req) => {
           .order('created_at', { ascending: false })
         result = subtasksData || []
         break
+      }
 
-      case 'saveSubtask':
+      case 'saveSubtask': {
         const { data: subtaskData } = await supabase
           .from('subtasks')
           .upsert({
@@ -263,6 +393,7 @@ Deno.serve(async (req) => {
           .single()
         result = subtaskData
         break
+      }
 
       case 'deleteSubtask':
         await supabase.from('subtasks').delete().eq('id', params.subtaskId).eq('user_id', userId)
@@ -270,7 +401,7 @@ Deno.serve(async (req) => {
         break
 
       // Notifications
-      case 'getNotifications':
+      case 'getNotifications': {
         const { data: notificationsData } = await supabase
           .from('notifications')
           .select('*')
@@ -278,8 +409,9 @@ Deno.serve(async (req) => {
           .order('created_at', { ascending: false })
         result = notificationsData || []
         break
+      }
 
-      case 'addNotification':
+      case 'addNotification': {
         const { data: notificationData } = await supabase
           .from('notifications')
           .insert({
@@ -296,6 +428,7 @@ Deno.serve(async (req) => {
           .single()
         result = notificationData
         break
+      }
 
       case 'markNotificationRead':
         await supabase.from('notifications').update({ read: true }).eq('id', params.notificationId).eq('user_id', userId)
@@ -303,7 +436,7 @@ Deno.serve(async (req) => {
         break
 
       // Settings
-      case 'getSettings':
+      case 'getSettings': {
         const { data: settingsData } = await supabase
           .from('settings')
           .select('value')
@@ -317,6 +450,7 @@ Deno.serve(async (req) => {
           enableAutoExcelExport: false,
         }
         break
+      }
 
       case 'saveSettings':
         await supabase
@@ -342,7 +476,7 @@ Deno.serve(async (req) => {
     )
   } catch (error) {
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: 'Internal error' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
     )
   }
