@@ -49,7 +49,7 @@ async function ensureAdminExists() {
   const { data: admin } = await supabase
     .from('users')
     .select('id')
-    .eq('name', 'superadmin')
+    .eq('role', 'admin')
     .single();
 
   if (!admin) {
@@ -203,6 +203,16 @@ export async function changeUsername(userId: string, newName: string): Promise<{
     .eq('id', userId);
 
   if (error) return { success: false, error: '用户名修改失败' };
+  return { success: true, error: null };
+}
+
+export async function deleteUser(userId: string): Promise<{ success: boolean; error: string | null }> {
+  const { error } = await supabase
+    .from('users')
+    .delete()
+    .eq('id', userId);
+
+  if (error) return { success: false, error: '删除用户失败' };
   return { success: true, error: null };
 }
 

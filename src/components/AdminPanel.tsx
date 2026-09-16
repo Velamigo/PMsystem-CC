@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getPendingUsers, approveUser, rejectUser, getAllUsers, resetUserPassword, changeUsername, type User } from '../services/auth';
-import { Key, User as UserIcon, X, CheckCircle, AlertCircle } from 'lucide-react';
+import { getPendingUsers, approveUser, rejectUser, getAllUsers, resetUserPassword, changeUsername, deleteUser, type User } from '../services/auth';
+import { Key, User as UserIcon, X, CheckCircle, AlertCircle, Trash2 } from 'lucide-react';
 
 interface AdminPanelProps {
   onClose: () => void;
@@ -86,6 +86,17 @@ export default function AdminPanel({ onClose, onUpdateCurrentUser }: AdminPanelP
       }
     } else {
       showToast(error || '修改失败', 'error');
+    }
+  };
+
+  const handleDeleteUser = async (userId: string, userName: string) => {
+    if (!confirm(`确定要删除用户 "${userName}" 吗？此操作不可恢复。`)) return;
+    const { success, error } = await deleteUser(userId);
+    if (success) {
+      showToast(`已删除用户 ${userName}`);
+      await loadData();
+    } else {
+      showToast(error || '删除失败', 'error');
     }
   };
 
@@ -216,6 +227,13 @@ export default function AdminPanel({ onClose, onUpdateCurrentUser }: AdminPanelP
                         title="重置密码"
                       >
                         <Key size={16} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteUser(user.id, user.name)}
+                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="删除用户"
+                      >
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </div>
