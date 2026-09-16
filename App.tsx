@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Project, Task, ViewState, TaskStatus, AppNotification, Milestone, ProjectStatus, AppSettings } from './types';
 import { getProjects, saveProjects, getNotifications, addNotification, markNotificationRead, checkDeadlines, createProject, duplicateProject, deleteProject, hardDeleteProject, addMilestone, updateMilestone, deleteMilestone, setProjectStatus, generateBackupData, getSettings, saveSettings, importData, exportData, updateProject } from './services/supabaseService';
-import { supabase } from './services/supabaseClient';
+import { getCurrentUser, logout, type User as AuthUser } from './src/services/auth';
 import { exportToExcelDB, importFromExcelDB, generateExcelBuffer } from './services/excelService';
 import { Dashboard } from './components/Dashboard';
 import { ProjectDetail } from './components/ProjectDetail';
@@ -11,8 +11,9 @@ import { CalendarView } from './components/CalendarView';
 import { SettingsPage } from './components/SettingsPage';
 import { NotificationList } from './components/NotificationList';
 import { GlobalTaskList } from './components/GlobalTaskList';
-import { LoginPage } from './components/LoginPage';
-import { Bell, Calendar, Layout, Globe, Download, Upload, Settings, Trash2, X, RefreshCw, AlertTriangle, User, LogOut, Edit2, CheckCircle, FileSpreadsheet, Database } from 'lucide-react';
+import LoginPage from './src/components/LoginPage';
+import AdminPanel from './src/components/AdminPanel';
+import { Bell, Calendar, Layout, Globe, Download, Upload, Settings, Trash2, X, RefreshCw, AlertTriangle, LogOut, Edit2, CheckCircle, Database, Shield } from 'lucide-react';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 
 const AppContent: React.FC = () => {
@@ -21,13 +22,14 @@ const AppContent: React.FC = () => {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [currentUserEmail, setCurrentUserEmail] = useState('');
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [loading, setLoading] = useState(true);
   
   // User Profile State
-  const [userName, setUserName] = useState('John Doe');
+  const [userName, setUserName] = useState('User');
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState('');
 
@@ -44,29 +46,14 @@ const AppContent: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { language, setLanguage, t } = useLanguage();
 
-  // Auth state listener
+  // Check auth state on mount
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        setIsAuthenticated(true);
-        setCurrentUserEmail(session.user.email || '');
-        setUserName(session.user.email?.split('@')[0] || 'User');
-      } else {
-        setIsAuthenticated(false);
-        setCurrentUserEmail('');
-      }
-    });
-
-    // Check initial auth state
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        setIsAuthenticated(true);
-        setCurrentUserEmail(session.user.email || '');
-        setUserName(session.user.email?.split('@')[0] || 'User');
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    const user = getCurrentUser();
+    if (user) {
+      setIsAuthenticated(true);
+      setCurrentUser(user);
+      setUserName(user.name);
+    }
   }, []);
 
   // Load data on mount (only when authenticated)
@@ -107,18 +94,21 @@ const AppContent: React.FC = () => {
   }, [isAuthenticated]);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    logout();
     setIsAuthenticated(false);
-    setCurrentUserEmail('');
+    setCurrentUser(null);
     setProjects([]);
     setNotifications([]);
   };
 
-  const handleLogin = (email: string) => {
-    setCurrentUserEmail(email);
-    setIsAuthenticated(true);
-    setUserName(email.split('@')[0]);
-    setLoading(true);
+  const handleLogin = () => {
+    const user = getCurrentUser();
+    if (user) {
+      setCurrentUser(user);
+      setIsAuthenticated(true);
+      setUserName(user.name);
+      setLoading(true);
+    }
   };
 
   // Auto Backup Logic
@@ -714,7 +704,7 @@ const AppContent: React.FC = () => {
                        <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 z-50 animate-fade-in overflow-hidden">
                            <div className="p-4 border-b border-slate-100 bg-slate-50">
                                <p className="text-xs text-slate-500 font-medium uppercase mb-1">{t.userProfile}</p>
-                               <p className="text-sm text-slate-700 font-medium truncate">{currentUserEmail}</p>
+                               <p className="text-sm text-slate-700 font-medium truncate">{currentUser?.name || 'User'}</p>
                                {isEditingName ? (
                                    <div className="flex gap-2 mt-2">
                                        <input 
@@ -740,6 +730,15 @@ const AppContent: React.FC = () => {
                                )}
                            </div>
                            <div className="p-2">
+                               {currentUser?.role === 'admin' && (
+                                   <button 
+                                        onClick={() => { setShowAdminPanel(true); setShowProfileMenu(false); }}
+                                        className="w-full flex items-center px-3 py-2 text-sm text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                                    >
+                                        <Shield size={16} className="mr-2" />
+                                        用户管理
+                                    </button>
+                               )}
                                <button 
                                     onClick={() => { setViewState({ type: 'SETTINGS' }); setShowProfileMenu(false); }}
                                     className="w-full flex items-center px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-blue-600 rounded-lg transition-colors"
@@ -859,6 +858,11 @@ const AppContent: React.FC = () => {
                 </div>
              </div>
         </div>
+      )}
+
+      {/* Admin Panel Modal */}
+      {showAdminPanel && currentUser?.role === 'admin' && (
+        <AdminPanel onClose={() => setShowAdminPanel(false)} />
       )}
     </div>
   );
