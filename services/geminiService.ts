@@ -1,9 +1,9 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { getSettings } from "./storageService";
+import { getSettings } from "./supabaseService";
 
-const getClient = () => {
-  const settings = getSettings();
+const getClient = async () => {
+  const settings = await getSettings();
   
   // Check Global AI Toggle
   if (!settings.enableAI) {
@@ -22,7 +22,7 @@ const getClient = () => {
 
 // Feature 1: Break down tasks
 export const suggestSubtasks = async (taskTitle: string, taskDescription: string): Promise<string[]> => {
-  const client = getClient();
+  const client = await getClient();
   if (!client) return []; // Silent fail if disabled
 
   try {
@@ -60,7 +60,7 @@ export const suggestSubtasks = async (taskTitle: string, taskDescription: string
 
 // Feature 2: Enhance Description
 export const enhanceTaskDescription = async (taskTitle: string, currentDescription: string): Promise<string> => {
-    const client = getClient();
+    const client = await getClient();
     if (!client) return "";
 
     try {

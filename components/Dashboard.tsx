@@ -341,7 +341,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                                 })}
                                             </div>
                                         ) : (
-                                            <div className="text-[10px] text-slate-400 italic py-1 text-center lg:text-left">No milestones set</div>
+                                            <div className="text-[10px] text-slate-400 italic py-1 text-center lg:text-left">{t.noMilestonesSet}</div>
                                         )}
                                     </div>
                                 </div>

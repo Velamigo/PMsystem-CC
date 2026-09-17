@@ -1,7 +1,57 @@
 /// <reference types="vite/client" />
-import { Project, Task, TaskStatus, TaskPriority, AppNotification, Milestone, AppSettings, ProjectStatus } from '../types';
+import { Project, Task, Subtask, TaskStatus, TaskPriority, AppNotification, Milestone, AppSettings, ProjectStatus } from '../types';
 
-const EDGE_FUNCTION_URL = 'https://bqhnrmcrcvsmrxyxdymx.supabase.co/functions/v1/api-proxy';
+// ============ Data Normalization ============
+// The edge function may return raw snake_case DB rows (older deployments) or
+// nested camelCase objects. Normalize to the frontend shape and guarantee the
+// tasks/milestones/subtasks arrays always exist so the UI never crashes.
+
+const todayStr = () => new Date().toISOString().split('T')[0];
+
+const normalizeSubtask = (st: any): Subtask => ({
+  id: st.id,
+  title: st.title ?? '',
+  completed: !!st.completed,
+  assignee: st.assignee ?? '',
+  dueDate: st.dueDate ?? st.due_date ?? undefined,
+});
+
+const normalizeTask = (t: any): Task => ({
+  id: t.id,
+  projectId: t.projectId ?? t.project_id,
+  title: t.title ?? '',
+  description: t.description ?? '',
+  status: t.status ?? TaskStatus.TODO,
+  priority: t.priority ?? TaskPriority.MEDIUM,
+  tags: Array.isArray(t.tags) ? t.tags : [],
+  startDate: t.startDate ?? t.start_date ?? todayStr(),
+  dueDate: t.dueDate ?? t.due_date ?? todayStr(),
+  assignee: t.assignee ?? '',
+  requester: t.requester ?? '',
+  dependencies: Array.isArray(t.dependencies) ? t.dependencies : [],
+  subtasks: Array.isArray(t.subtasks) ? t.subtasks.map(normalizeSubtask) : [],
+  createdAt: t.createdAt ?? t.created_at ?? new Date().toISOString(),
+});
+
+const normalizeMilestone = (m: any): Milestone => ({
+  id: m.id,
+  title: m.title ?? '',
+  date: m.date ?? m.due_date ?? todayStr(),
+  completed: !!m.completed,
+});
+
+const normalizeProject = (p: any): Project => ({
+  id: p.id,
+  name: p.name ?? '',
+  description: p.description ?? '',
+  status: p.status ?? ProjectStatus.ACTIVE,
+  deletedAt: p.deletedAt ?? p.deleted_at ?? undefined,
+  createdAt: p.createdAt ?? p.created_at ?? new Date().toISOString(),
+  tasks: Array.isArray(p.tasks) ? p.tasks.map(normalizeTask) : [],
+  milestones: Array.isArray(p.milestones) ? p.milestones.map(normalizeMilestone) : [],
+});
+
+const EDGE_FUNCTION_URL = import.meta.env.VITE_EDGE_FUNCTION_URL || 'https://bqhnrmcrcvsmrxyxdymx.supabase.co/functions/v1/api-proxy';
 
 // 获取当前用户 ID
 export const getCurrentUserId = async (): Promise<string | null> => {
@@ -44,7 +94,7 @@ async function callEdgeFunction(operation: string, params: any = {}): Promise<an
 export const getProjects = async (): Promise<Project[]> => {
   try {
     const projects = await callEdgeFunction('getProjects');
-    return projects || [];
+    return (Array.isArray(projects) ? projects : []).map(normalizeProject);
   } catch (error) {
     console.error('Error fetching projects:', error);
     return [];
@@ -81,13 +131,20 @@ export const duplicateProject = async (projectId: string, copySuffix: string): P
   const original = projects.find(p => p.id === projectId);
   if (!original) return projects;
 
+  const newProjectId = crypto.randomUUID();
   const newProject: Project = {
     ...original,
-    id: crypto.randomUUID(),
+    id: newProjectId,
     name: `${original.name} ${copySuffix}`,
     createdAt: new Date().toISOString(),
-    tasks: original.tasks?.map(t => ({ ...t, id: crypto.randomUUID(), projectId: crypto.randomUUID() })) || [],
-    milestones: original.milestones?.map(m => ({ ...m, id: crypto.randomUUID(), projectId: crypto.randomUUID() })) || [],
+    deletedAt: undefined,
+    tasks: original.tasks?.map(t => ({
+      ...t,
+      id: crypto.randomUUID(),
+      projectId: newProjectId,
+      subtasks: (t.subtasks || []).map(st => ({ ...st, id: crypto.randomUUID() })),
+    })) || [],
+    milestones: original.milestones?.map(m => ({ ...m, id: crypto.randomUUID(), projectId: newProjectId })) || [],
   };
   await callEdgeFunction('saveProject', { project: newProject });
   return getProjects();
@@ -160,7 +217,7 @@ export const saveMilestone = async (milestone: Milestone): Promise<Milestone> =>
 };
 
 export const updateMilestone = async (projectId: string, milestone: Milestone): Promise<Project[]> => {
-  await callEdgeFunction('saveMilestone', { milestone });
+  await callEdgeFunction('saveMilestone', { milestone: { ...milestone, projectId } });
   return getProjects();
 };
 
@@ -169,7 +226,7 @@ export const deleteMilestone = async (milestoneId: string): Promise<void> => {
 };
 
 export const addMilestone = async (projectId: string, milestone: Milestone): Promise<Project[]> => {
-  await callEdgeFunction('saveMilestone', { milestone });
+  await callEdgeFunction('saveMilestone', { milestone: { ...milestone, projectId } });
   return getProjects();
 };
 
@@ -222,23 +279,30 @@ export const saveNotifications = async (notifications: AppNotification[]): Promi
 
 // ============ Settings ============
 
+const DEFAULT_SETTINGS: AppSettings = {
+  commonTags: ['Bug', 'Feature', 'Design', 'Backend', 'Frontend', 'Urgent'],
+  commonAssignees: ['Alice', 'Bob', 'Charlie', 'David'],
+  commonRequesters: ['Product Manager', 'CEO', 'Client A', 'Client B'],
+  enableAutoExcelExport: false,
+};
+
+// Settings stored by older versions may miss fields; SettingsPage maps the arrays
+// directly, so a missing array would crash the whole page. Always merge with defaults.
+const normalizeSettings = (s: any): AppSettings => ({
+  ...DEFAULT_SETTINGS,
+  ...(s || {}),
+  commonTags: Array.isArray(s?.commonTags) ? s.commonTags : DEFAULT_SETTINGS.commonTags,
+  commonAssignees: Array.isArray(s?.commonAssignees) ? s.commonAssignees : DEFAULT_SETTINGS.commonAssignees,
+  commonRequesters: Array.isArray(s?.commonRequesters) ? s.commonRequesters : DEFAULT_SETTINGS.commonRequesters,
+});
+
 export const getSettings = async (): Promise<AppSettings> => {
   try {
     const settings = await callEdgeFunction('getSettings');
-    return settings || {
-      commonTags: ['Bug', 'Feature', 'Design', 'Backend', 'Frontend', 'Urgent'],
-      commonAssignees: ['Alice', 'Bob', 'Charlie', 'David'],
-      commonRequesters: ['Product Manager', 'CEO', 'Client A', 'Client B'],
-      enableAutoExcelExport: false,
-    };
+    return normalizeSettings(settings);
   } catch (error) {
     console.error('Error fetching settings:', error);
-    return {
-      commonTags: ['Bug', 'Feature', 'Design', 'Backend', 'Frontend', 'Urgent'],
-      commonAssignees: ['Alice', 'Bob', 'Charlie', 'David'],
-      commonRequesters: ['Product Manager', 'CEO', 'Client A', 'Client B'],
-      enableAutoExcelExport: false,
-    };
+    return { ...DEFAULT_SETTINGS };
   }
 };
 
@@ -295,34 +359,12 @@ export const importData = async (file: File): Promise<{ projects: Project[]; set
           throw new Error('Invalid backup format: No projects array found.');
         }
 
+        // saveProject syncs the whole aggregate (tasks/subtasks/milestones)
         for (const project of loadedProjects) {
           await callEdgeFunction('saveProject', { project });
-
-          if (project.tasks) {
-            for (const task of project.tasks) {
-              await callEdgeFunction('saveTask', { task });
-
-              if (task.subtasks) {
-                for (const subtask of task.subtasks) {
-                  await callEdgeFunction('saveSubtask', {
-                    subtask: {
-                      ...subtask,
-                      taskId: task.id,
-                    },
-                  });
-                }
-              }
-            }
-          }
-
-          if (project.milestones) {
-            for (const milestone of project.milestones) {
-              await callEdgeFunction('saveMilestone', { milestone });
-            }
-          }
         }
 
-        resolve({ projects: loadedProjects, settings: loadedSettings });
+        resolve({ projects: loadedProjects.map(normalizeProject), settings: loadedSettings });
       } catch (error) {
         reject(error);
       }

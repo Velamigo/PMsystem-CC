@@ -67,7 +67,7 @@ export const GlobalTaskList: React.FC<GlobalTaskListProps> = ({
                 const q = searchQuery.toLowerCase();
                 return item.task.title.toLowerCase().includes(q) || 
                        item.project.name.toLowerCase().includes(q) ||
-                       item.task.assignee.toLowerCase().includes(q);
+                       (item.task.assignee || '').toLowerCase().includes(q);
             })
             .sort((a, b) => new Date(a.task.dueDate).getTime() - new Date(b.task.dueDate).getTime());
     }, [projects, statusFilter, searchQuery]);
@@ -78,6 +78,15 @@ export const GlobalTaskList: React.FC<GlobalTaskListProps> = ({
           case TaskPriority.MEDIUM: return 'text-amber-600 bg-amber-50 border-amber-100';
           case TaskPriority.LOW: return 'text-blue-600 bg-blue-50 border-blue-100';
           default: return 'text-slate-500';
+        }
+    };
+
+    const getPriorityLabel = (priority: TaskPriority) => {
+        switch (priority) {
+          case TaskPriority.HIGH: return t.high;
+          case TaskPriority.MEDIUM: return t.medium;
+          case TaskPriority.LOW: return t.low;
+          default: return t.medium;
         }
     };
 
@@ -96,7 +105,9 @@ export const GlobalTaskList: React.FC<GlobalTaskListProps> = ({
                         {statusFilter === 'PENDING' ? t.tasksRemaining : t.totalTasks}
                     </h1>
                     <p className="text-slate-500 mt-2">
-                        {flattenedTasks.length} tasks found across {projects.filter(p => p.status === ProjectStatus.ACTIVE).length} active projects.
+                        {t.tasksFoundSummary
+                            .replace('{count}', String(flattenedTasks.length))
+                            .replace('{projects}', String(projects.filter(p => p.status === ProjectStatus.ACTIVE).length))}
                     </p>
                 </div>
                 
@@ -105,7 +116,7 @@ export const GlobalTaskList: React.FC<GlobalTaskListProps> = ({
                         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                         <input 
                             type="text" 
-                            placeholder="Search tasks..." 
+                            placeholder={t.searchTasks} 
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 text-slate-800"
@@ -122,7 +133,7 @@ export const GlobalTaskList: React.FC<GlobalTaskListProps> = ({
                             onClick={() => setStatusFilter('ALL')}
                             className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${statusFilter === 'ALL' ? 'bg-slate-100 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
                         >
-                            All Tasks
+                            {t.allTasks}
                         </button>
                     </div>
                 </div>
@@ -131,7 +142,7 @@ export const GlobalTaskList: React.FC<GlobalTaskListProps> = ({
             <div className="space-y-3">
                 {flattenedTasks.length === 0 ? (
                     <div className="text-center py-20 bg-white rounded-xl border border-dashed border-slate-300">
-                        <p className="text-slate-400">No tasks found matching your criteria.</p>
+                        <p className="text-slate-400">{t.noTasksFilter}</p>
                     </div>
                 ) : (
                     flattenedTasks.map(({ task, project, theme }) => (
@@ -156,18 +167,18 @@ export const GlobalTaskList: React.FC<GlobalTaskListProps> = ({
                                         
                                         <div className={`ml-3 flex items-center text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide border ${getPriorityColor(task.priority || TaskPriority.MEDIUM)}`}>
                                             <Flag size={10} className="mr-1" />
-                                            {task.priority}
+                                            {getPriorityLabel(task.priority || TaskPriority.MEDIUM)}
                                         </div>
                                     </div>
                                     <p className="text-slate-500 text-sm line-clamp-1">{task.description}</p>
                                 </div>
 
                                 <div className="flex items-center gap-6 text-sm text-slate-500">
-                                    <div className="flex items-center w-32" title="Assignee">
+                                    <div className="flex items-center w-32" title={t.assignee}>
                                         <User size={16} className="mr-1.5 text-slate-400" />
-                                        <span className="truncate">{task.assignee || 'Unassigned'}</span>
+                                        <span className="truncate">{task.assignee || t.unassigned}</span>
                                     </div>
-                                    <div className="flex items-center w-40" title="Due Date">
+                                    <div className="flex items-center w-40" title={t.dueDate}>
                                         <Clock size={16} className="mr-1.5 text-slate-400" />
                                         {new Date(task.dueDate).toLocaleDateString()}
                                     </div>

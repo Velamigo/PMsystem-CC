@@ -27,7 +27,7 @@
     "noEmit": true
   },
   "exclude": [
-    "edge-function",
+    "supabase",
     "node_modules"
   ]
 }

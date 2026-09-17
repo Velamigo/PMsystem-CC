@@ -1,5 +1,7 @@
 -- Multi-user auth schema for ProTrack
--- Run this in Supabase SQL Editor
+-- DEPRECATED: kept for history only. This project does not use Supabase Auth
+-- (auth.uid() is always null here), so the policies below are dead weight.
+-- Use supabase-schema.sql (default deny, no policies) instead.
 
 -- Add user_id to all tables
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;

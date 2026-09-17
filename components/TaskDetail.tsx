@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Task, Subtask, TaskStatus, TaskPriority, AppSettings } from '../types';
 import { ArrowLeft, Save, Trash2, Plus, X, CheckSquare, Square, Tag, GitMerge, Calendar, ChevronDown, AlertTriangle, Check, History, User } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
-import { getProjects, getSettings } from '../services/storageService';
+import { getProjects, getSettings } from '../services/supabaseService';
 import { DatePicker } from './DatePicker';
 
 interface TaskDetailProps {
@@ -197,12 +197,18 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ task, projectId, onBack,
   // Load other tasks & Settings
   useEffect(() => {
     window.scrollTo(0, 0);
-    const allProjects = getProjects();
-    const currentProject = allProjects.find(p => p.id === projectId);
-    if (currentProject) {
+    let cancelled = false;
+    getProjects().then(allProjects => {
+      if (cancelled) return;
+      const currentProject = allProjects.find(p => p.id === projectId);
+      if (currentProject) {
         setProjectTasks(currentProject.tasks.filter(t => t.id !== formData.id));
-    }
-    setSettings(getSettings());
+      }
+    });
+    getSettings().then(s => {
+      if (!cancelled) setSettings(s);
+    });
+    return () => { cancelled = true; };
   }, [projectId, formData.id]);
 
   // Auto-resize textarea
@@ -332,7 +338,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ task, projectId, onBack,
   return (
     <div className="animate-fade-in max-w-4xl mx-auto pb-20">
       {/* Header */}
-      <div className="flex items-center justify-between mb-8 sticky top-0 bg-slate-50 py-4 z-20 border-b border-slate-200">
+      <div className="flex items-center justify-between mb-8 sticky top-16 bg-slate-50 py-4 z-20 border-b border-slate-200">
         <button 
           onClick={onBack}
           className="flex items-center text-slate-500 hover:text-slate-800 transition-colors"
@@ -412,7 +418,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ task, projectId, onBack,
                         />
                         <div className="ml-3">
                             <span className="block text-sm font-medium text-slate-900">{t.typeNormal}</span>
-                            <span className="block text-xs text-slate-500">Manual date selection</span>
+                            <span className="block text-xs text-slate-500">{t.manualDateHint}</span>
                         </div>
                     </label>
                     <label className={`flex items-center p-3 rounded-lg border cursor-pointer transition-all flex-1 ${taskType === 'DEPENDENT' ? 'bg-white border-blue-500 shadow-sm' : 'border-slate-200 hover:bg-white'}`}>
@@ -425,7 +431,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ task, projectId, onBack,
                         />
                          <div className="ml-3">
                             <span className="block text-sm font-medium text-slate-900">{t.typeDependent}</span>
-                            <span className="block text-xs text-slate-500">Calculated from predecessor</span>
+                            <span className="block text-xs text-slate-500">{t.dependentDateHint}</span>
                         </div>
                     </label>
                 </div>
@@ -477,7 +483,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ task, projectId, onBack,
                                             {pt.title} (End: {pt.dueDate})
                                         </option>
                                     )) : (
-                                        <option disabled>No other tasks available</option>
+                                        <option disabled>{t.noOtherTasks}</option>
                                     )}
                                 </select>
                                 <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-amber-400 pointer-events-none" />
@@ -641,14 +647,14 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ task, projectId, onBack,
                     
                     {formData.subtasks.length === 0 && (
                         <div className="text-center py-4 text-slate-400 text-sm italic">
-                            No subtasks added yet.
+                            {t.noSubtasksYet}
                         </div>
                     )}
                 </div>
 
                 {/* Add New Subtask Form - Inline */}
                 <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100">
-                    <p className="text-xs font-bold text-blue-800 mb-3 uppercase tracking-wide">Add New Subtask</p>
+                    <p className="text-xs font-bold text-blue-800 mb-3 uppercase tracking-wide">{t.addNewSubtask}</p>
                     <div className="flex flex-col sm:flex-row gap-3 items-center">
                         <input 
                             type="text"

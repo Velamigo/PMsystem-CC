@@ -6,6 +6,11 @@ body {
     background-color: #f8fafc; 
 }
 
+/* Modal overlays: allow scrolling when the dialog is taller than the viewport
+   (short windows / browser zoom), otherwise the calendar and footer buttons get clipped. */
+.fixed.inset-0.flex.items-center.justify-center { overflow-y: auto; }
+.fixed.inset-0.flex.items-center.justify-center > * { margin: auto; }
+
 /* Custom scrollbar for task lists */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

@@ -404,7 +404,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                             );
                         })}
                         {sortedMilestones.length === 0 && (
-                            <div className="text-slate-400 italic text-sm w-full text-center">No milestones yet. Click Add Milestone to create one.</div>
+                            <div className="text-slate-400 italic text-sm w-full text-center">{t.noMilestonesYet}</div>
                         )}
                     </div>
                 </div>

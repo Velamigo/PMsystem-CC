@@ -73,6 +73,13 @@ CREATE TABLE IF NOT EXISTS settings (
   PRIMARY KEY (key, user_id)
 );
 
+-- Used by the api-proxy edge function to throttle login/register attempts per IP
+CREATE TABLE IF NOT EXISTS auth_rate_limits (
+  ip TEXT PRIMARY KEY,
+  count INT NOT NULL DEFAULT 0,
+  reset_at TIMESTAMPTZ NOT NULL
+);
+
 INSERT INTO settings (key, user_id, value) VALUES
   ('app_settings', NULL, '{
     "userName": "User",
@@ -99,13 +106,10 @@ ALTER TABLE milestones ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subtasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
+-- Internal bookkeeping table: only reachable with the service role key (no public policy on purpose)
+ALTER TABLE auth_rate_limits ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow read on users" ON users FOR SELECT USING (true);
-CREATE POLICY "Allow insert on users" ON users FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow update on users" ON users FOR UPDATE USING (true);
-CREATE POLICY "Allow all on projects" ON projects FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all on tasks" ON tasks FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all on milestones" ON milestones FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all on subtasks" ON subtasks FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all on notifications" ON notifications FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all on settings" ON settings FOR ALL USING (true) WITH CHECK (true);
+-- No policies on purpose: RLS default-deny means anon/publishable keys read nothing.
+-- All data access goes through the api-proxy Edge Function using the service role key.
+-- Never add `USING (true)` policies here (see PLAYBOOK.md section 2/7).
+

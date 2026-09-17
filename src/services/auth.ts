@@ -1,6 +1,6 @@
 // 认证服务 - 通过 Edge Function 调用
 
-const EDGE_FUNCTION_URL = 'https://bqhnrmcrcvsmrxyxdymx.supabase.co/functions/v1/api-proxy';
+const EDGE_FUNCTION_URL = import.meta.env.VITE_EDGE_FUNCTION_URL || 'https://bqhnrmcrcvsmrxyxdymx.supabase.co/functions/v1/api-proxy';
 
 const AUTH_HEADERS = {
   'Content-Type': 'application/json',
@@ -189,38 +189,19 @@ export async function deleteUser(userId: string): Promise<{ success: boolean; er
   return { success: true, error: null };
 }
 
-// 修改自己的密码（管理员需要知道旧密码）
+// 修改自己的密码（服务端验证旧密码）
 export async function changeOwnPassword(userId: string, oldPassword: string, newPassword: string): Promise<{ success: boolean; error: string | null }> {
-  // 通过 login 验证旧密码
-  const user = getCurrentUser();
-  if (!user) return { success: false, error: '未登录' };
-
-  const loginResponse = await fetch(EDGE_FUNCTION_URL, {
-    method: 'POST',
-    headers: AUTH_HEADERS,
-    body: JSON.stringify({
-      operation: 'login',
-      params: { name: user.name, password: oldPassword },
-    }),
-  });
-  const loginResult = await loginResponse.json();
-
-  if (loginResult.error || !loginResult.data) {
-    return { success: false, error: '原密码错误' };
-  }
-
-  // 调用 resetUserPassword 设置新密码
   const response = await fetch(EDGE_FUNCTION_URL, {
     method: 'POST',
     headers: AUTH_HEADERS,
     body: JSON.stringify({
-      operation: 'resetUserPassword',
-      params: { userId, password: newPassword },
+      operation: 'changeOwnPassword',
+      params: { oldPassword, newPassword },
       authToken: getCurrentUserId(),
     }),
   });
   const result = await response.json();
-  if (result.error) return { success: false, error: '密码修改失败' };
+  if (result.error) return { success: false, error: result.error };
   return { success: true, error: null };
 }
 

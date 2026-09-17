@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Tag, User, Users, Database, FileDown, FileUp, FolderOpen, ToggleRight, ToggleLeft, AlertTriangle, FileSpreadsheet } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
-import { getSettings, saveSettings, exportData } from '../services/storageService';
+import { getSettings, saveSettings, exportData } from '../services/supabaseService';
 import { AppSettings } from '../types';
 
 interface SettingsPageProps {
@@ -26,28 +26,32 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, onImport, on
     const [newRequester, setNewRequester] = useState('');
 
     useEffect(() => {
-        const currentSettings = getSettings();
-        setSettings(currentSettings);
-        if (window.electron && currentSettings.backupPath) {
-            setElectronPath(currentSettings.backupPath);
-            setLocalBackupEnabled(true);
-        }
-        
+        let cancelled = false;
+        getSettings().then(currentSettings => {
+            if (cancelled) return;
+            setSettings(currentSettings);
+            if (window.electron && currentSettings.backupPath) {
+                setElectronPath(currentSettings.backupPath);
+                setLocalBackupEnabled(true);
+            }
+        });
+
         // Check for File System Access API support
         // @ts-ignore
         if (!window.showDirectoryPicker && !window.electron) {
             setFileSystemApiSupported(false);
         }
+        return () => { cancelled = true; };
     }, []);
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (settings) {
             // Include backup path in persistence
             const settingsToSave = {
                 ...settings,
                 backupPath: electronPath || undefined
             };
-            saveSettings(settingsToSave);
+            await saveSettings(settingsToSave);
             alert(t.dataSaved);
         }
     };
@@ -55,6 +59,26 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, onImport, on
     const toggleAutoExcelExport = () => {
         if (settings) {
             setSettings({ ...settings, enableAutoExcelExport: !settings.enableAutoExcelExport });
+        }
+    };
+
+    const handleManualExport = async () => {
+        try {
+            const data = await exportData();
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const now = new Date();
+            const pad = (n: number) => String(n).padStart(2, '0');
+            a.href = url;
+            a.download = `PT_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error(err);
+            setBackupError(t.exportError);
         }
     };
 
@@ -89,7 +113,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, onImport, on
                     if (settings) {
                         const newSettings = { ...settings, backupPath: path };
                         setSettings(newSettings);
-                        saveSettings(newSettings);
+                        await saveSettings(newSettings);
                     }
                 }
             } catch (err) {
@@ -126,7 +150,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, onImport, on
         }
     };
 
-    const toggleBackup = () => {
+    const toggleBackup = async () => {
         if (!localBackupEnabled) {
             handleSelectBackupFolder();
         } else {
@@ -135,7 +159,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, onImport, on
              if (settings) {
                  const newSettings = { ...settings, backupPath: undefined };
                  setSettings(newSettings);
-                 saveSettings(newSettings);
+                 await saveSettings(newSettings);
              }
              if (onSetupBackup) onSetupBackup(null);
              setBackupError(null);
@@ -191,8 +215,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, onImport, on
                                             ? (electronPath ? `Save to: ...${electronPath.slice(-20)}` : t.backupFolderSelected) 
                                             : t.selectBackupFolder}
                                     </button>
-                                    {localBackupEnabled && <span className="text-xs text-green-600 font-bold flex items-center">● Active</span>}
-                                    {!fileSystemApiSupported && !window.electron && <span className="text-xs text-slate-400 italic">(Browser not supported)</span>}
+                                    {localBackupEnabled && <span className="text-xs text-green-600 font-bold flex items-center">● {t.backupActive}</span>}
+                                    {!fileSystemApiSupported && !window.electron && <span className="text-xs text-slate-400 italic">{t.browserNotSupported}</span>}
                                 </div>
                                 <button onClick={toggleBackup} disabled={!fileSystemApiSupported && !window.electron} className="text-blue-600 hover:text-blue-800 transition-colors ml-4 disabled:opacity-50">
                                     {localBackupEnabled ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-slate-300" />}
@@ -206,11 +230,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, onImport, on
                                         <FileSpreadsheet size={18} />
                                     </div>
                                     <div>
-                                        <span className="block text-sm font-medium text-slate-700">Auto Excel Export (Hourly)</span>
+                                        <span className="block text-sm font-medium text-slate-700">{t.autoExcelExportTitle}</span>
                                         <span className="block text-xs text-slate-500">
                                             {localBackupEnabled 
-                                                ? "Saves directly to backup folder" 
-                                                : "If backup folder is not set, you will receive a notification to download."}
+                                                ? t.backupFolderHint 
+                                                : t.backupNotifyHint}
                                         </span>
                                     </div>
                                 </div>
@@ -233,7 +257,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, onImport, on
                             {/* Manual Import/Export */}
                             <div className="flex flex-wrap gap-4 items-center">
                                 <button 
-                                    onClick={exportData}
+                                    onClick={handleManualExport}
                                     className="flex items-center px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-bold text-slate-700 hover:bg-slate-50 hover:border-blue-300 hover:text-blue-700 transition-all shadow-sm"
                                 >
                                     <FileDown size={16} className="mr-2" />

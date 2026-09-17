@@ -1,7 +1,7 @@
 
 import * as XLSX from 'xlsx';
 import { Project, Task, Milestone, Subtask, ProjectStatus, TaskStatus, TaskPriority, AppSettings } from '../types';
-import { getSettings } from './storageService';
+import { getSettings } from './supabaseService';
 
 // Define the "Database Schema" for Excel
 interface ProjectRow {
@@ -52,7 +52,7 @@ interface SettingRow {
     value: string;
 }
 
-const createWorkbook = (projects: Project[]) => {
+const createWorkbook = async (projects: Project[]) => {
   const wb = XLSX.utils.book_new();
 
   // 1. Prepare Projects Table
@@ -127,7 +127,7 @@ const createWorkbook = (projects: Project[]) => {
   XLSX.utils.book_append_sheet(wb, wsMilestones, "Milestones");
 
   // 4. Settings Table
-  const currentSettings = getSettings();
+  const currentSettings = await getSettings();
   const settingRows: SettingRow[] = [
       { key: 'commonTags', value: JSON.stringify(currentSettings.commonTags) },
       { key: 'commonAssignees', value: JSON.stringify(currentSettings.commonAssignees) },
@@ -141,14 +141,14 @@ const createWorkbook = (projects: Project[]) => {
   return wb;
 };
 
-export const generateExcelBuffer = (projects: Project[]): Uint8Array => {
-  const wb = createWorkbook(projects);
+export const generateExcelBuffer = async (projects: Project[]): Promise<Uint8Array> => {
+  const wb = await createWorkbook(projects);
   // type: 'array' returns Uint8Array
   return XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as any;
 };
 
-export const exportToExcelDB = (projects: Project[]) => {
-  const wb = createWorkbook(projects);
+export const exportToExcelDB = async (projects: Project[]) => {
+  const wb = await createWorkbook(projects);
   
   const now = new Date();
   const yyyy = now.getFullYear();
@@ -165,7 +165,7 @@ export const exportToExcelDB = (projects: Project[]) => {
 export const importFromExcelDB = async (file: File): Promise<{projects: Project[], settings?: AppSettings} | null> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const wb = XLSX.read(data, { type: 'array' });
@@ -193,7 +193,7 @@ export const importFromExcelDB = async (file: File): Promise<{projects: Project[
         // Parse Settings
         let loadedSettings: AppSettings | undefined = undefined;
         if (settingRows.length > 0) {
-            const defaults = getSettings();
+            const defaults = await getSettings();
             const newSettings: any = { ...defaults };
             
             settingRows.forEach(row => {

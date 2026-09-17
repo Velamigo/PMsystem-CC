@@ -106,6 +106,14 @@ const AppContent: React.FC = () => {
     setCurrentUser(null);
     setProjects([]);
     setNotifications([]);
+    // Reset UI state so the next user does not land on the previous session's view/open dialogs
+    setViewState({ type: 'DASHBOARD' });
+    setShowProfileMenu(false);
+    setShowNotifications(false);
+    setShowAdminPanel(false);
+    setShowRecycleBin(false);
+    setShowPasswordChange(false);
+    setPasswordMsg(null);
   };
 
   const handleLogin = (user: AuthUser) => {
@@ -163,11 +171,11 @@ const AppContent: React.FC = () => {
               const excelFileName = `PT_${timestamp}.xlsx`;
 
               // 1. Generate Data
-              const jsonData = await generateBackupData();
+              const jsonData = JSON.stringify(await generateBackupData(), null, 2);
               let excelData: Uint8Array | null = null;
               if (isExcelEnabled) {
                    const currentProjects = await getProjects();
-                   excelData = generateExcelBuffer(currentProjects);
+                   excelData = await generateExcelBuffer(currentProjects);
               }
 
               // 2. Strategy A: Write to Disk (Preferred)
@@ -434,9 +442,30 @@ const AppContent: React.FC = () => {
   };
 
   // --- Excel Database Functions ---
-  const handleExcelExport = () => {
-      exportToExcelDB(projects);
-      showToast("Excel DB Exported");
+  const handleExcelExport = async () => {
+      await exportToExcelDB(projects);
+      showToast(t.excelExported);
+  };
+
+  const handleDataExport = async () => {
+      try {
+          const data = await exportData();
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          const now = new Date();
+          const pad = (n: number) => String(n).padStart(2, '0');
+          a.href = url;
+          a.download = `PT_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          showToast(t.dataExported);
+      } catch (err) {
+          console.error(err);
+          showToast(t.exportError);
+      }
   };
 
   const handleDataImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -455,6 +484,21 @@ const AppContent: React.FC = () => {
             }
 
             if (result) {
+                // The backend upserts projects one by one, so projects missing from the
+                // imported file must be removed explicitly, otherwise they reappear on reload.
+                const importedIds = new Set(result.projects.map(p => p.id));
+                const staleProjects = projects.filter(p => !importedIds.has(p.id));
+                if (staleProjects.length > 0) {
+                    const ok = window.confirm(t.importReplaceConfirm.replace('{count}', String(staleProjects.length)));
+                    if (!ok) {
+                        if (fileInputRef.current) fileInputRef.current.value = '';
+                        return;
+                    }
+                    for (const stale of staleProjects) {
+                        await hardDeleteProject(stale.id);
+                    }
+                }
+
                 setProjects(result.projects);
                 await saveProjects(result.projects);
                 
@@ -591,7 +635,7 @@ const AppContent: React.FC = () => {
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-slate-600 font-medium">Loading data from Supabase...</p>
+          <p className="text-slate-600 font-medium">{t.loadingData}</p>
         </div>
       </div>
     );
@@ -614,29 +658,31 @@ const AppContent: React.FC = () => {
       <div className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
-            <div className="flex items-center cursor-pointer gap-8">
+            <div className="flex items-center cursor-pointer gap-1 sm:gap-4 md:gap-8">
                 <div className="flex items-center gap-2" onClick={() => setViewState({ type: 'DASHBOARD' })}>
-                    <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-lg shadow-sm">
+                    <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-lg shadow-sm shrink-0">
                         P
                     </div>
-                    <span className="font-bold text-xl tracking-tight text-slate-800">{t.appTitle}</span>
+                    <span className="hidden sm:inline font-bold text-xl tracking-tight text-slate-800">{t.appTitle}</span>
                 </div>
                 
-                {/* Desktop Nav */}
-                <div className="hidden md:flex space-x-4">
+                {/* Main Nav (icons only below md, otherwise the Calendar view is unreachable on narrow screens) */}
+                <div className="flex space-x-1 md:space-x-4">
                      <button 
                         onClick={() => setViewState({ type: 'DASHBOARD' })}
-                        className={`flex items-center px-3 py-2 rounded-md text-sm font-medium transition-colors ${viewState.type === 'DASHBOARD' ? 'text-blue-600 bg-blue-50' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'}`}
+                        title={t.dashboard}
+                        className={`flex items-center px-2 md:px-3 py-2 rounded-md text-sm font-medium transition-colors ${viewState.type === 'DASHBOARD' ? 'text-blue-600 bg-blue-50' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'}`}
                      >
-                        <Layout size={18} className="mr-2" />
-                        {t.dashboard}
+                        <Layout size={18} className="md:mr-2" />
+                        <span className="hidden md:inline">{t.dashboard}</span>
                      </button>
                      <button 
                         onClick={() => setViewState({ type: 'CALENDAR' })}
-                        className={`flex items-center px-3 py-2 rounded-md text-sm font-medium transition-colors ${viewState.type === 'CALENDAR' ? 'text-blue-600 bg-blue-50' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'}`}
+                        title={t.calendar}
+                        className={`flex items-center px-2 md:px-3 py-2 rounded-md text-sm font-medium transition-colors ${viewState.type === 'CALENDAR' ? 'text-blue-600 bg-blue-50' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'}`}
                      >
-                        <Calendar size={18} className="mr-2" />
-                        {t.calendar}
+                        <Calendar size={18} className="md:mr-2" />
+                        <span className="hidden md:inline">{t.calendar}</span>
                      </button>
                 </div>
             </div>
@@ -646,9 +692,9 @@ const AppContent: React.FC = () => {
                 {/* Database Tools */}
                 <div className="flex items-center border-r border-slate-200 pr-4 mr-2 space-x-1 md:space-x-2">
                     <button 
-                        onClick={exportData}
+                        onClick={handleDataExport}
                         className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors flex items-center gap-1"
-                        title="Export Data (JSON)"
+                        title={t.exportData}
                     >
                         <Database size={20} />
                         <Download size={12} />
@@ -656,7 +702,7 @@ const AppContent: React.FC = () => {
                     <button 
                         onClick={triggerImport}
                         className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors flex items-center gap-1"
-                        title="Import from Excel/JSON Database"
+                        title={t.importData}
                     >
                          <Database size={20} />
                          <Upload size={12} />
