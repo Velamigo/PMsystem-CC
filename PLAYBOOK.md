@@ -225,6 +225,7 @@ Deno.serve(async (req) => {
 | SQL Editor 报 `syntax error at or near "-"` | SQL 里有 `--` 注释 | 删注释 |
 | 拿 publishable key 能读全表 | RLS 有 `USING (true)` policy | 删光 policy，default deny |
 | 保存数据静默失败（返回 null） | 表缺列 / 吞错误 | 表结构与代码对齐；写操作 throw error |
+| 所有写操作返回 500 Internal error | 云端表结构与代码不一致（列名/NOT NULL 对不上，如 `dependencies` vs `dependency_ids`、`completed` vs `status`） | 查 `information_schema.columns` 对比代码 upsert 的字段名，用 `ALTER TABLE ... RENAME COLUMN / ADD COLUMN IF NOT EXISTS / ALTER COLUMN ... DROP NOT NULL` 对齐（2026-09 实测踩过） |
 | 普通用户改密码失败 | 复用了管理员接口 | 独立 changeOwnPassword 操作 |
 | 限流不生效 | Edge 多 isolate，内存 Map 不共享 | 限流计数存数据库表 |
 | Cloudflare 打开白屏 | vite `base` 是 GH Pages 子路径 | 改 `base: './'` |
