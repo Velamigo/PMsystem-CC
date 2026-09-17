@@ -156,6 +156,8 @@ Deno.serve(async (req) => {
 4. 本项目无前端路由（纯状态切换页面），因此不需要 `404.html` 兜底。
 5. 页面 origin 是 `https://velamigo.github.io`（不含 `/PMsystem-CC/` 路径），已在 Edge Function 的 `ALLOWED_ORIGINS` 内。
 6. 外部依赖铁律：不要引入 `cdn.tailwindcss.com`、`fonts.googleapis.com` 等运行时外链。它们是渲染阻塞请求，国内线路慢或不通时表现为长时间空白页（2026-09 已改为构建期编译 Tailwind + 系统字体栈）。
+7. 数据库连接与前端托管位置**无关**：前端不装 `@supabase/supabase-js`、不直连数据库，只 `fetch` Edge Function（`services/supabaseService.ts` 里的 `EDGE_FUNCTION_URL`）；密钥、RLS、service role 全在云端函数内。换托管平台不需要动数据库配置，只需保证新 origin 在 `ALLOWED_ORIGINS` 里。
+8. 发布前确认 `.env.local` 里没有 `VITE_EDGE_FUNCTION_URL`。GitHub Pages 走的是**本地构建**（会读 `.env.local`），本地调试时若把它指向 mock（如 `http://localhost:8787`），发布就会把 mock 地址带上线；Cloudflare 那条线在云端构建、读不到 `.env.local`，所以两条线的产物可能不一致。
 
 ### 5.2 备用：Cloudflare Worker（国内需代理）
 
