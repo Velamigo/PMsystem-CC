@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   description TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'ACTIVE',
+  visibility TEXT NOT NULL DEFAULT 'PERSONAL',
   deleted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -88,7 +89,8 @@ ALTER TABLE auth_rate_limits ENABLE ROW LEVEL SECURITY;
 ### 2.4 表结构纪律
 - **表结构必须和 Edge Function / 前端字段一一对应**。本次事故：业务表缺列导致所有 upsert 静默失败（返回 null），功能全坏但登录正常，极难发现。
 - 写操作必须检查 `error` 并抛出，**禁止吞错误返回 null**。
-- 每张业务表带 `user_id` 归属列，服务端所有读写都按 `user_id = 当前登录用户` 过滤。
+- 每张业务表带 `user_id` 归属列（创建者），服务端所有读写都先过归属/可见性校验（见 §6.1）。
+- 云端真实结构以 `information_schema.columns` 为准，`supabase-schema.sql` 是同步过的快照；改完表结构记得回写这个文件。
 
 ## 3. 阶段三：Edge Function 后端（唯一 API 入口）
 
@@ -121,8 +123,8 @@ Deno.serve(async (req) => {
   // 3) 公开操作白名单：只有 login / register / initAdmin
   //    其余操作必须 authToken → 查 users 表 → status==='approved' 才放行（401 否则）
   // 4) 管理员操作白名单 adminOps：额外校验 role==='admin'（403 否则）
-  // 5) 归属校验 assertOwnership(table, id)：行已存在且 user_id 不等于当前用户 → 403
-  //    （防 upsert 抢数据：客户端传别人的 id 就想覆盖/夺走该行）
+  // 5) 归属校验 rowOwner(table, id) / canAccessProject(id, requireOwner)：
+  //    行已存在且当前用户无权访问 → 403（防 upsert 抢数据：传别人的 id 就想覆盖/夺走该行）
   // 6) register 强制 role='user', status='pending'，忽略客户端传入值（防提权）
   // 7) initAdmin 密码只读环境变量 ADMIN_INIT_PASSWORD，没有就报错，禁止代码里写默认密码
   // 8) login 响应剔除 password_hash；getAllUsers 等只 select 安全字段
@@ -186,10 +188,8 @@ Deno.serve(async (req) => {
 
 ### 5.3 vite 配置铁律
 - `base` 用 `'./'`（相对路径）。用 `'/仓库名/'` 会导致 Cloudflare 根域名下资源 404 白屏；用 `'./'` 两边通吃。
-
-### 5.3 GitHub Pages（备选，仅公开仓库）
-- `base: '/仓库名/'`，`npm run build && gh-pages -d dist`。
-- 免费 plan 不支持私有仓库；浏览器缓存顽固，验证用无痕模式。
+- GitHub Pages 免费 plan 不支持私有仓库；浏览器缓存顽固，验证用无痕模式或比对 assets 指纹（`index-XXXXXXXX.js`）是否与本地 `dist/` 一致。
+- 部署地址容易记错：以 `git remote -v` 里的 owner/repo 为准拼 `https://{owner}.github.io/{repo}/`，不要凭印象写域名（本项目是 `velamigo.github.io/PMsystem-CC/`，不是别的账号）。
 
 ## 6. 阶段六：多用户 + 审批设计
 
@@ -197,6 +197,23 @@ Deno.serve(async (req) => {
 - 登录时服务端检查 `status === 'approved'`，pending 用户提示"等待审批"。
 - 首个管理员由 `initAdmin` 创建：仅当库里没有任何 admin 时生效，密码读环境变量 `ADMIN_INIT_PASSWORD`。**部署后第一件事：登录改密码**（默认/对话里出现过的密码视为已泄露）。
 - 用户名唯一（UNIQUE 约束 + 服务端查重提示）。
+
+### 6.1 数据可见性模型（项目级 PERSONAL / TEAM）
+
+多用户系统必须先回答"谁能看到谁的数据"。本项目的模型：
+
+| 项目 `visibility` | 谁能看到 | 谁能改任务/子任务/里程碑 | 谁能改项目本身 |
+|---|---|---|---|
+| `PERSONAL`（默认） | 只有创建者 | 只有创建者 | 只有创建者 |
+| `TEAM` | 所有已批准用户 | 所有已批准用户 | 只有创建者（owner） |
+
+实现要点：
+1. **后端是唯一真相**：`getVisibleProjectIds()` 用 `user_id.eq.{me} OR visibility.eq.TEAM` 取可见项目，再用这批 id 过滤 tasks/milestones。前端不做权限判断，只做 UI 提示。
+2. **写操作两级校验**：`canAccessProject(id, requireOwner)`——项目级写操作（改名/状态/可见性/删除）传 `requireOwner=true`；任务级写操作传 `false`，让团队成员能协作。`rowOwner(table, id)` 用于按行反查所属项目。
+3. **回收站别被可见性过滤掉**：`getProjects` 要保留 `deleted_at IS NOT NULL` 的项目，但只对其 owner 可见（`!p.deleted_at || p.user_id === me`），否则别人能恢复/彻底删除你的项目。
+4. **前端不要全量保存**：把整个 `projects[]` 一次性回写会对他人项目触发 403。任务变更走 `updateTask`/`deleteTask` 单条保存；`saveProjects` 内部按 `ownerId` 跳过不可写项目并回报 skipped 数量。
+5. **UI 表达**：项目卡片/详情标题旁挂徽章（锁=个人，双人=团队），团队项目额外显示创建者名字（后端 `getProjects` 批量查 `users.name` 拼成 `ownerName`，避免前端 N+1 请求）；非 owner 的项目管理按钮隐藏并提示"只有项目创建者才能执行此操作"。新建项目表单默认选"个人项目"。
+6. 改可见性是 owner 专属操作，且**改完要清前端缓存**——否则被移出可见范围的项目还留在本地 state 里。
 
 ## 7. 阶段七：安全验收清单（每次大改后跑一遍）
 
@@ -215,6 +232,10 @@ Deno.serve(async (req) => {
 | 9 | 删最后一个管理员 / 删自己 | deleteUser | 400 |
 | 10 | 跨站调用 | 从非白名单 Origin 请求 | CORS 拒绝 |
 | 11 | 前端翻源码 | F12 Sources 搜密码/key | 搜不到 |
+| 12 | 读他人个人项目 | 用 B 的 token `getProjects` | 结果里没有 A 的 PERSONAL 项目 |
+| 13 | 改他人项目本体 | 用 B 的 token saveProject 改 A 的项目名/状态/visibility | 403 |
+| 14 | 改他人团队项目的任务 | 用 B 的 token saveTask（A 的 TEAM 项目） | 成功（协作场景允许） |
+| 15 | 翻他人回收站 | A 软删项目后用 B 的 token getProjects | B 看不到该软删项目 |
 
 ## 8. 坑位速查表（本次全部踩过）
 
@@ -233,6 +254,9 @@ Deno.serve(async (req) => {
 | 国内不开代理打不开线上（workers.dev） | `*.workers.dev` 在中国大陆被 DNS 污染（返回假 IP） | 用 GitHub Pages 主线地址；国内要直连须绑自定义域名 |
 | 页面长时间空白、Console 无报错 | 渲染阻塞外链（`cdn.tailwindcss.com` / `fonts.googleapis.com`）加载不到 | 样式改构建期编译，字体用系统栈，不引运行时外链 |
 | 部署后网页还是旧的 | 浏览器/CDN 缓存 | 无痕模式或强刷 |
+| 成员打开团队项目改任务报 403 | 前端一次性全量回写 `projects[]`，其中含他人 owner 的项目 | 改细粒度保存（`updateTask`/`deleteTask`）；`saveProjects` 内部按 `ownerId` 跳过并提示 skipped |
+| 软删项目在回收站消失 | `getProjects` 用可见性过滤把 `deleted_at` 行一并挡掉 | 过滤条件放宽为 `!deleted_at \|\| user_id === me`（只对 owner 保留软删行） |
+| `.in('id', [])` 报 500 | 可见项目为空时仍拼空数组条件 | 先判 `ids.length === 0` 直接返回 `[]` |
 | 找不到 JWT/Secrets 设置页 | 新版 Dashboard 改版 | JWT 在 Settings→API Keys/JWT Keys；Secrets 在 Edge Functions 设置 |
 | 重命名管理员后多出重复账号 | 初始化只查固定用户名 | 改查"是否存在任意 admin" |
 

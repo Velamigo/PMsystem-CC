@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Project, Task, ViewState, TaskStatus, AppNotification, Milestone, ProjectStatus, AppSettings } from './types';
-import { getProjects, saveProjects, getNotifications, addNotification, markNotificationRead, checkDeadlines, createProject, duplicateProject, deleteProject, hardDeleteProject, addMilestone, updateMilestone, deleteMilestone, setProjectStatus, generateBackupData, getSettings, saveSettings, importData, exportData, updateProject } from './services/supabaseService';
+import { Project, Task, ViewState, TaskStatus, AppNotification, Milestone, ProjectStatus, AppSettings, ProjectVisibility } from './types';
+import { getProjects, saveProjects, getNotifications, addNotification, markNotificationRead, checkDeadlines, createProject, duplicateProject, deleteProject, hardDeleteProject, addMilestone, updateMilestone, deleteMilestone, setProjectStatus, generateBackupData, getSettings, saveSettings, importData, exportData, updateProject, updateTask, deleteTask } from './services/supabaseService';
 import { getCurrentUser, logout, changeOwnPassword, updateCurrentUser, type User as AuthUser } from './src/services/auth';
 import { exportToExcelDB, importFromExcelDB, generateExcelBuffer } from './services/excelService';
 import { Dashboard } from './components/Dashboard';
@@ -283,6 +283,24 @@ const AppContent: React.FC = () => {
       return updatedTasks;
   };
 
+  // Persist only the tasks that actually changed inside a single project. Saving the
+  // whole project list used to hit the owner-only saveProject endpoint for projects
+  // the current user cannot write (TEAM projects owned by somebody else) and fail.
+  const persistChangedTasks = async (before: Task[], after: Task[]) => {
+      const beforeById = new Map(before.map(t => [t.id, t]));
+      for (const task of after) {
+          if (JSON.stringify(beforeById.get(task.id)) !== JSON.stringify(task)) {
+              await updateTask(task);
+          }
+      }
+  };
+
+  // Project-level mutations (rename, status, delete) are restricted to the creator.
+  const isOwnProject = (projectId: string) => {
+      const project = projects.find(p => p.id === projectId);
+      return !project?.ownerId || project.ownerId === currentUser?.id;
+  };
+
   const handleCreateTask = async (newTask: Task) => {
     // Handle notification for new assignment before map
     if (newTask.assignee && !projects.some(p => p.id === newTask.projectId && p.tasks.some(t => t.id === newTask.id))) {
@@ -298,6 +316,8 @@ const AppContent: React.FC = () => {
         const updatedNotifs = await addNotification(notif);
         setNotifications(updatedNotifs);
     }
+
+    const targetProject = projects.find(p => p.id === newTask.projectId);
 
     const updatedProjects = projects.map(p => {
         if (p.id === newTask.projectId) {
@@ -320,7 +340,10 @@ const AppContent: React.FC = () => {
     });
     
     setProjects(updatedProjects);
-    await saveProjects(updatedProjects);
+    if (targetProject) {
+        const updatedProject = updatedProjects.find(p => p.id === targetProject.id);
+        if (updatedProject) await persistChangedTasks(targetProject.tasks, updatedProject.tasks);
+    }
     
     // Return to project view
     setViewState({ type: 'PROJECT_DETAIL', projectId: newTask.projectId });
@@ -336,39 +359,34 @@ const AppContent: React.FC = () => {
           return p;
       });
       setProjects(updatedProjects);
-      await saveProjects(updatedProjects);
+      await deleteTask(taskId);
       setViewState({ type: 'PROJECT_DETAIL', projectId });
   };
 
   const handleUpdateTaskStatus = async (projectId: string, taskId: string, status: TaskStatus) => {
-      const updatedProjects = projects.map(p => {
-          if (p.id === projectId) {
-              const task = p.tasks.find(t => t.id === taskId);
-              if (task && task.status !== status) {
-                  // Add notification for status change
-                  const statusText = status === TaskStatus.DONE ? t.done : status === TaskStatus.IN_PROGRESS ? t.inProgress : t.todo;
+      const project = projects.find(p => p.id === projectId);
+      const task = project?.tasks.find(t => t.id === taskId);
+      if (!project || !task || task.status === status) return;
 
-                  const notif: AppNotification = {
-                      id: (crypto as any).randomUUID(),
-                      title: language === 'zh' ? '任务更新' : 'Task Updated',
-                      message: language === 'zh' ? `任务 "${task.title}" 标记为 ${statusText}` : `Task "${task.title}" marked as ${statusText}`,
-                      type: 'STATUS_CHANGE',
-                      read: false,
-                      createdAt: new Date().toISOString(),
-                      relatedId: taskId
-                  };
-                  addNotification(notif).then(updated => setNotifications(updated));
-              }
+      // Add notification for status change
+      const statusText = status === TaskStatus.DONE ? t.done : status === TaskStatus.IN_PROGRESS ? t.inProgress : t.todo;
 
-              return {
-                  ...p,
-                  tasks: p.tasks.map(t => t.id === taskId ? { ...t, status } : t)
-              };
-          }
-          return p;
-      });
-      setProjects(updatedProjects);
-      await saveProjects(updatedProjects);
+      const notif: AppNotification = {
+          id: (crypto as any).randomUUID(),
+          title: language === 'zh' ? '任务更新' : 'Task Updated',
+          message: language === 'zh' ? `任务 "${task.title}" 标记为 ${statusText}` : `Task "${task.title}" marked as ${statusText}`,
+          type: 'STATUS_CHANGE',
+          read: false,
+          createdAt: new Date().toISOString(),
+          relatedId: taskId
+      };
+      addNotification(notif).then(updated => setNotifications(updated));
+
+      const updatedTask = { ...task, status };
+      setProjects(projects.map(p => p.id === projectId
+          ? { ...p, tasks: p.tasks.map(x => x.id === taskId ? updatedTask : x) }
+          : p));
+      await updateTask(updatedTask);
   };
 
   const handleNotificationClick = async (notification: AppNotification) => {
@@ -384,13 +402,14 @@ const AppContent: React.FC = () => {
       // Can add other click handlers here (e.g. navigate to task)
   };
 
-  const handleCreateProject = async (name: string, desc: string) => {
-      const updated = await createProject(name, desc);
+  const handleCreateProject = async (name: string, desc: string, visibility: ProjectVisibility = 'PERSONAL') => {
+      const updated = await createProject(name, desc, visibility);
       setProjects(updated);
       showToast(t.dataSaved);
   };
 
   const handleUpdateProject = async (updatedProject: Project) => {
+      if (!isOwnProject(updatedProject.id)) { showToast(t.ownerOnlyAction); return; }
       await updateProject(updatedProject);
       const newProjects = projects.map(p => p.id === updatedProject.id ? updatedProject : p);
       setProjects(newProjects);
@@ -405,6 +424,7 @@ const AppContent: React.FC = () => {
 
   const handleDeleteProject = async (projectId: string) => {
       if (!projectId) return;
+      if (!isOwnProject(projectId)) { showToast(t.ownerOnlyAction); return; }
       // deleteProject is now "soft delete" in supabaseService
       const updated = await deleteProject(projectId);
       setProjects(updated);
@@ -414,6 +434,7 @@ const AppContent: React.FC = () => {
   // Permanently delete
   const handleHardDeleteProject = async (projectId: string) => {
       if (!projectId) return;
+      if (!isOwnProject(projectId)) { showToast(t.ownerOnlyAction); return; }
       const updated = await hardDeleteProject(projectId);
       setProjects(updated);
   };
@@ -421,6 +442,7 @@ const AppContent: React.FC = () => {
   // New handler for Suspend/Restore
   const handleUpdateProjectStatus = async (projectId: string, status: ProjectStatus) => {
       if (!projectId) return;
+      if (!isOwnProject(projectId)) { showToast(t.ownerOnlyAction); return; }
       const updated = await setProjectStatus(projectId, status);
       setProjects(updated);
   };
@@ -471,7 +493,7 @@ const AppContent: React.FC = () => {
   const handleDataImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
           const file = e.target.files[0];
-          let result: { projects: Project[], settings?: AppSettings } | null = null;
+          let result: { projects: Project[], settings?: AppSettings, skipped?: Project[] } | null = null;
           
           try {
             if (file.name.toLowerCase().endsWith('.xlsx')) {
@@ -486,8 +508,9 @@ const AppContent: React.FC = () => {
             if (result) {
                 // The backend upserts projects one by one, so projects missing from the
                 // imported file must be removed explicitly, otherwise they reappear on reload.
+                // Only projects owned by the current user may be removed this way.
                 const importedIds = new Set(result.projects.map(p => p.id));
-                const staleProjects = projects.filter(p => !importedIds.has(p.id));
+                const staleProjects = projects.filter(p => !importedIds.has(p.id) && isOwnProject(p.id));
                 if (staleProjects.length > 0) {
                     const ok = window.confirm(t.importReplaceConfirm.replace('{count}', String(staleProjects.length)));
                     if (!ok) {
@@ -500,12 +523,14 @@ const AppContent: React.FC = () => {
                 }
 
                 setProjects(result.projects);
-                await saveProjects(result.projects);
+                const skipped = await saveProjects(result.projects);
                 
                 if (result.settings) {
                     await saveSettings(result.settings);
                 }
-                showToast(t.dataImported);
+                showToast(skipped.length > 0
+                    ? `${t.dataImported} ${t.importSkipped.replace('{count}', String(skipped.length))}`
+                    : t.dataImported);
             } else {
                 alert(t.importError);
             }
@@ -544,6 +569,7 @@ const AppContent: React.FC = () => {
         return (
           <Dashboard 
             projects={projects} 
+            currentUserId={currentUser?.id}
             onSelectProject={(id) => setViewState({ type: 'PROJECT_DETAIL', projectId: id })}
             onUpdateTaskStatus={handleUpdateTaskStatus}
             onCreateProject={handleCreateProject}
@@ -591,6 +617,7 @@ const AppContent: React.FC = () => {
         return (
           <ProjectDetail 
             project={project}
+            currentUserId={currentUser?.id}
             onBack={() => setViewState({ type: 'DASHBOARD' })}
             onSelectTask={(taskId) => setViewState({ type: 'TASK_DETAIL', projectId: project.id, taskId })}
             onAddTask={() => setViewState({ type: 'TASK_DETAIL', projectId: project.id, taskId: 'new' })}

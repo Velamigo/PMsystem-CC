@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { Project, Task, Subtask, TaskStatus, TaskPriority, AppNotification, Milestone, AppSettings, ProjectStatus } from '../types';
+import { Project, Task, Subtask, TaskStatus, TaskPriority, AppNotification, Milestone, AppSettings, ProjectStatus, ProjectVisibility } from '../types';
 
 // ============ Data Normalization ============
 // The edge function may return raw snake_case DB rows (older deployments) or
@@ -45,6 +45,9 @@ const normalizeProject = (p: any): Project => ({
   name: p.name ?? '',
   description: p.description ?? '',
   status: p.status ?? ProjectStatus.ACTIVE,
+  visibility: p.visibility === 'TEAM' ? 'TEAM' : 'PERSONAL',
+  ownerId: p.ownerId ?? p.user_id ?? undefined,
+  ownerName: p.ownerName ?? undefined,
   deletedAt: p.deletedAt ?? p.deleted_at ?? undefined,
   createdAt: p.createdAt ?? p.created_at ?? new Date().toISOString(),
   tasks: Array.isArray(p.tasks) ? p.tasks.map(normalizeTask) : [],
@@ -101,22 +104,43 @@ export const getProjects = async (): Promise<Project[]> => {
   }
 };
 
-export const saveProjects = async (projects: Project[]): Promise<void> => {
+// Only the creator may write the project row itself. TEAM projects let every
+// logged-in user edit tasks/milestones, but renaming/deleting stays owner-only,
+// so a bulk save must skip projects owned by somebody else instead of failing.
+export const isProjectWritable = async (project: Project): Promise<boolean> => {
+  if (!project.ownerId) return true;
+  const userId = await getCurrentUserId();
+  return project.ownerId === userId;
+};
+
+// Returns the projects that were skipped because the current user is not their owner.
+export const saveProjects = async (projects: Project[]): Promise<Project[]> => {
+  const skipped: Project[] = [];
   for (const project of projects) {
+    if (!(await isProjectWritable(project))) {
+      skipped.push(project);
+      continue;
+    }
     await callEdgeFunction('saveProject', { project });
   }
+  return skipped;
 };
 
 export const updateProject = async (updatedProject: Project): Promise<void> => {
   await callEdgeFunction('saveProject', { project: updatedProject });
 };
 
-export const createProject = async (name: string, description: string): Promise<Project[]> => {
+export const createProject = async (
+  name: string,
+  description: string,
+  visibility: ProjectVisibility = 'PERSONAL'
+): Promise<Project[]> => {
   const project: Project = {
     id: crypto.randomUUID(),
     name,
     description,
     status: ProjectStatus.ACTIVE,
+    visibility,
     deletedAt: null,
     createdAt: new Date().toISOString(),
     tasks: [],
@@ -327,7 +351,7 @@ export const exportData = async (): Promise<any> => {
   };
 };
 
-export const importData = async (file: File): Promise<{ projects: Project[]; settings?: AppSettings } | null> => {
+export const importData = async (file: File): Promise<{ projects: Project[]; settings?: AppSettings; skipped?: Project[] } | null> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -359,12 +383,12 @@ export const importData = async (file: File): Promise<{ projects: Project[]; set
           throw new Error('Invalid backup format: No projects array found.');
         }
 
-        // saveProject syncs the whole aggregate (tasks/subtasks/milestones)
-        for (const project of loadedProjects) {
-          await callEdgeFunction('saveProject', { project });
-        }
+        // saveProject syncs the whole aggregate (tasks/subtasks/milestones).
+        // Projects owned by somebody else are skipped instead of failing the import.
+        const normalized = loadedProjects.map(normalizeProject);
+        const skipped = await saveProjects(normalized);
 
-        resolve({ projects: loadedProjects.map(normalizeProject), settings: loadedSettings });
+        resolve({ projects: normalized, settings: loadedSettings, skipped });
       } catch (error) {
         reject(error);
       }

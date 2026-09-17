@@ -1,13 +1,14 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Project, Task, Milestone, TaskStatus, TaskPriority } from '../types';
-import { Calendar, CheckCircle, Circle, Plus, ArrowLeft, User, Clock, Filter, SlidersHorizontal, Flag, List, BarChart2, Trash2, X, Pencil, CornerDownRight, ChevronDown, ChevronUp, Check } from 'lucide-react';
+import { Project, Task, Milestone, TaskStatus, TaskPriority, ProjectVisibility } from '../types';
+import { Calendar, CheckCircle, Circle, Plus, ArrowLeft, User, Clock, Filter, SlidersHorizontal, Flag, List, BarChart2, Trash2, X, Pencil, CornerDownRight, ChevronDown, ChevronUp, Check, Lock, Users } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { GanttChart } from './GanttChart';
 import { DatePicker } from './DatePicker';
 
 interface ProjectDetailProps {
   project: Project;
+  currentUserId?: string;
   onBack: () => void;
   onSelectTask: (taskId: string) => void;
   onUpdateTaskStatus: (taskId: string, status: TaskStatus) => void;
@@ -20,6 +21,7 @@ interface ProjectDetailProps {
 
 export const ProjectDetail: React.FC<ProjectDetailProps> = ({ 
   project, 
+  currentUserId,
   onBack, 
   onSelectTask, 
   onUpdateTaskStatus,
@@ -40,7 +42,11 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   const [isEditingHeader, setIsEditingHeader] = useState(false);
   const [tempName, setTempName] = useState(project.name);
   const [tempDesc, setTempDesc] = useState(project.description);
+  const [tempVisibility, setTempVisibility] = useState<ProjectVisibility>(project.visibility || 'PERSONAL');
   const descTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Only the creator may change project-level settings, including visibility.
+  const isOwner = !project.ownerId || project.ownerId === currentUserId;
 
   // Milestone Section State (Default Collapsed)
   const [isMilestonesExpanded, setIsMilestonesExpanded] = useState(false);
@@ -55,7 +61,8 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   useEffect(() => {
       setTempName(project.name);
       setTempDesc(project.description);
-  }, [project.name, project.description]);
+      setTempVisibility(project.visibility || 'PERSONAL');
+  }, [project.name, project.description, project.visibility]);
 
   // Auto-resize description textarea
   useEffect(() => {
@@ -70,7 +77,8 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
           onUpdateProject({
               ...project,
               name: tempName,
-              description: tempDesc
+              description: tempDesc,
+              visibility: tempVisibility
           });
           setIsEditingHeader(false);
       }
@@ -79,6 +87,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   const handleCancelProjectHeader = () => {
       setTempName(project.name);
       setTempDesc(project.description);
+      setTempVisibility(project.visibility || 'PERSONAL');
       setIsEditingHeader(false);
   };
 
@@ -294,15 +303,42 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                     className="text-slate-600 w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-blue-500 resize-none min-h-[80px]"
                     placeholder={t.projectDesc}
                 />
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">{t.projectVisibility}</label>
+                    <div className="flex gap-2">
+                        {(['PERSONAL', 'TEAM'] as ProjectVisibility[]).map(v => (
+                            <button
+                                key={v}
+                                type="button"
+                                onClick={() => setTempVisibility(v)}
+                                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-bold transition-all ${tempVisibility === v ? 'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-500' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'}`}
+                            >
+                                {v === 'TEAM' ? <Users size={14} /> : <Lock size={14} />}
+                                {v === 'TEAM' ? t.visibilityTeam : t.visibilityPersonal}
+                            </button>
+                        ))}
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1.5">{tempVisibility === 'TEAM' ? t.visibilityTeamHint : t.visibilityPersonalHint}</p>
+                </div>
             </div>
         ) : (
             <div 
                 className="relative p-2 -m-2 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer group/header"
-                onClick={() => setIsEditingHeader(true)}
+                onClick={() => isOwner && setIsEditingHeader(true)}
             >
                 <div className="flex items-center gap-3">
                     <h1 className="text-3xl font-bold text-slate-900">{project.name}</h1>
-                    <Pencil size={18} className="text-slate-300 opacity-0 group-hover/header:opacity-100 transition-all" />
+                    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold tracking-wide border ${project.visibility === 'TEAM' ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                        {project.visibility === 'TEAM' ? <Users size={11} /> : <Lock size={11} />}
+                        {project.visibility === 'TEAM' ? t.visibilityTeam : t.visibilityPersonal}
+                    </span>
+                    {project.visibility === 'TEAM' && project.ownerName && (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold text-slate-500 bg-white border border-slate-200">
+                            <User size={11} />
+                            {t.projectOwnerLabel}{project.ownerName}
+                        </span>
+                    )}
+                    {isOwner && <Pencil size={18} className="text-slate-300 opacity-0 group-hover/header:opacity-100 transition-all" />}
                 </div>
                 <p className="text-slate-500 mt-2 max-w-3xl leading-relaxed">{project.description}</p>
             </div>

@@ -11,10 +11,11 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS projects (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'ACTIVE',
+  visibility TEXT NOT NULL DEFAULT 'PERSONAL',
   deleted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -22,7 +23,8 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS tasks (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  parent_task_id UUID REFERENCES tasks(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   description TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'TODO',
@@ -33,31 +35,41 @@ CREATE TABLE IF NOT EXISTS tasks (
   assignee TEXT DEFAULT '',
   requester TEXT DEFAULT '',
   dependencies UUID[] DEFAULT '{}',
+  estimated_hours NUMERIC DEFAULT 0,
+  actual_hours NUMERIC DEFAULT 0,
+  completion_percentage INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS milestones (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
-  date DATE NOT NULL,
-  completed BOOLEAN DEFAULT FALSE
+  description TEXT DEFAULT '',
+  due_date DATE,
+  status TEXT DEFAULT 'PENDING',
+  date DATE,
+  completed BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS subtasks (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
-  completed BOOLEAN DEFAULT FALSE,
+  description TEXT DEFAULT '',
+  status TEXT DEFAULT 'TODO',
   assignee TEXT DEFAULT '',
-  due_date DATE
+  due_date DATE,
+  completed BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   message TEXT NOT NULL,
   type TEXT NOT NULL,
@@ -68,7 +80,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT NOT NULL,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   value JSONB NOT NULL,
   PRIMARY KEY (key, user_id)
 );
@@ -80,20 +92,12 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
   reset_at TIMESTAMPTZ NOT NULL
 );
 
-INSERT INTO settings (key, user_id, value) VALUES
-  ('app_settings', NULL, '{
-    "userName": "User",
-    "commonTags": ["Bug", "Feature", "Design", "Backend", "Frontend", "Urgent"],
-    "commonAssignees": ["Alice", "Bob", "Charlie", "David"],
-    "commonRequesters": ["Product Manager", "CEO", "Client A", "Client B"],
-    "enableAutoExcelExport": false
-  }'::jsonb)
-ON CONFLICT (key, user_id) DO NOTHING;
-
 CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_projects_visibility ON projects(visibility);
 CREATE INDEX IF NOT EXISTS idx_tasks_user_id ON tasks(user_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_milestones_user_id ON milestones(user_id);
 CREATE INDEX IF NOT EXISTS idx_subtasks_user_id ON subtasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
@@ -113,3 +117,6 @@ ALTER TABLE auth_rate_limits ENABLE ROW LEVEL SECURITY;
 -- All data access goes through the api-proxy Edge Function using the service role key.
 -- Never add `USING (true)` policies here (see PLAYBOOK.md section 2/7).
 
+-- visibility: 'PERSONAL' = only the creator (projects.user_id) can see it;
+--             'TEAM'     = every approved user can see it and edit its tasks.
+-- Project-level writes (rename / status / visibility / delete) stay owner-only.

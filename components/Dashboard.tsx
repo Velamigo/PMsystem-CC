@@ -1,7 +1,7 @@
 
 import React, { useMemo, useState } from 'react';
-import { Project, TaskStatus, ProjectStatus, Milestone } from '../types';
-import { Briefcase, CheckCircle, Clock, AlertCircle, Plus, X, Settings, List, Ban, RefreshCw, AlertTriangle, Pencil, Flag, Trash2, CheckSquare, Check, Search, FileSpreadsheet, Copy, LayoutList, StretchVertical, ChevronRight, ChevronDown } from 'lucide-react';
+import { Project, TaskStatus, ProjectStatus, Milestone, ProjectVisibility } from '../types';
+import { Briefcase, CheckCircle, Clock, AlertCircle, Plus, X, Settings, List, Ban, RefreshCw, AlertTriangle, Pencil, Flag, Trash2, CheckSquare, Check, Search, FileSpreadsheet, Copy, LayoutList, StretchVertical, ChevronRight, ChevronDown, Lock, Users, User } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 // Define a consistent color palette
@@ -27,9 +27,10 @@ const getProjectTheme = (id: string) => {
 
 interface DashboardProps {
   projects: Project[];
+  currentUserId?: string;
   onSelectProject: (projectId: string) => void;
   onUpdateTaskStatus: (projectId: string, taskId: string, status: TaskStatus) => void;
-  onCreateProject: (name: string, desc: string) => void;
+  onCreateProject: (name: string, desc: string, visibility: ProjectVisibility) => void;
   onDuplicateProject: (projectId: string) => void;
   onDeleteProject: (projectId: string) => void;
   onUpdateProjectStatus: (projectId: string, status: ProjectStatus) => void;
@@ -40,6 +41,7 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({ 
     projects = [], 
+    currentUserId,
     onSelectProject, 
     onCreateProject, 
     onDuplicateProject,
@@ -59,6 +61,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [showManageModal, setShowManageModal] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDesc, setNewProjectDesc] = useState('');
+  const [newProjectVisibility, setNewProjectVisibility] = useState<ProjectVisibility>('PERSONAL');
   const [projectSearch, setProjectSearch] = useState('');
 
   // Milestone Confirmation State
@@ -101,11 +104,36 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const handleSubmitNewProject = (e: React.FormEvent) => {
       e.preventDefault();
       if(newProjectName.trim()) {
-          onCreateProject(newProjectName, newProjectDesc);
+          onCreateProject(newProjectName, newProjectDesc, newProjectVisibility);
           setNewProjectName('');
           setNewProjectDesc('');
+          setNewProjectVisibility('PERSONAL');
           setShowNewProjectModal(false);
       }
+  };
+
+  // Project-level actions belong to the creator; TEAM projects only open up task editing.
+  const isOwner = (project: Project) => !project.ownerId || project.ownerId === currentUserId;
+
+  const renderVisibilityBadge = (project: Project) => {
+      const isTeam = project.visibility === 'TEAM';
+      return (
+          <span className="hidden sm:inline-flex items-center gap-1 flex-shrink-0 min-w-0">
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wide border ${isTeam ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                  {isTeam ? <Users size={9} /> : <Lock size={9} />}
+                  {isTeam ? t.visibilityTeam : t.visibilityPersonal}
+              </span>
+              {isTeam && project.ownerName && (
+                  <span
+                      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-semibold text-slate-500 bg-white border border-slate-200 max-w-[120px]"
+                      title={`${t.projectOwnerLabel}${project.ownerName}`}
+                  >
+                      <User size={9} className="flex-shrink-0" />
+                      <span className="truncate">{project.ownerName}</span>
+                  </span>
+              )}
+          </span>
+      );
   };
 
   const handleEditClick = (projectId: string, e: React.MouseEvent) => {
@@ -287,6 +315,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <h3 className={`font-bold transition-all truncate ${viewMode === 'COMPACT' ? 'text-sm text-slate-700' : 'text-base text-blue-900'}`}>
                                     {project.name}
                                 </h3>
+                                {renderVisibilityBadge(project)}
                                 {viewMode === 'COMPACT' && (
                                      <span className="text-[10px] font-bold text-slate-500 bg-slate-200/60 px-1.5 py-0.5 rounded ml-2 flex-shrink-0">
                                         {percent}%
@@ -383,6 +412,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <form onSubmit={handleSubmitNewProject} className="p-6 space-y-4">
                     <div><label className="block text-sm font-medium text-slate-700 mb-1">{t.projectName}</label><input type="text" required value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder={t.enterTitle} /></div>
                     <div><label className="block text-sm font-medium text-slate-700 mb-1">{t.projectDesc}</label><textarea rows={3} value={newProjectDesc} onChange={(e) => setNewProjectDesc(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder={t.descPlaceholder} /></div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1.5">{t.projectVisibility}</label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {(['PERSONAL', 'TEAM'] as ProjectVisibility[]).map(v => (
+                                <button
+                                    key={v}
+                                    type="button"
+                                    onClick={() => setNewProjectVisibility(v)}
+                                    className={`text-left p-3 rounded-lg border transition-all ${newProjectVisibility === v ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-slate-200 bg-white hover:border-slate-300'}`}
+                                >
+                                    <span className="flex items-center gap-1.5 text-sm font-bold text-slate-800">
+                                        {v === 'TEAM' ? <Users size={14} className="text-indigo-500" /> : <Lock size={14} className="text-slate-400" />}
+                                        {v === 'TEAM' ? t.visibilityTeam : t.visibilityPersonal}
+                                    </span>
+                                    <span className="block text-[11px] text-slate-500 mt-1 leading-snug">{v === 'TEAM' ? t.visibilityTeamHint : t.visibilityPersonalHint}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                     <div className="flex justify-end gap-3 pt-2">
                         <button type="button" onClick={() => setShowNewProjectModal(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium">{t.cancel}</button>
                         <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium">{t.createProject}</button>
@@ -409,7 +457,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             return (
                                 <div key={p.id} className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all">
                                     <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-2 mb-1"><h4 className="font-bold text-slate-800 text-base truncate">{p.name}</h4><span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide border ${isActive ? 'bg-green-50 text-green-700 border-green-200' : isCompleted ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>{isActive ? t.statusActive : isCompleted ? t.statusCompleted : t.statusSuspended}</span></div>
+                                        <div className="flex items-center gap-2 mb-1"><h4 className="font-bold text-slate-800 text-base truncate">{p.name}</h4><span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide border ${isActive ? 'bg-green-50 text-green-700 border-green-200' : isCompleted ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>{isActive ? t.statusActive : isCompleted ? t.statusCompleted : t.statusSuspended}</span>{renderVisibilityBadge(p)}</div>
                                         <p className="text-xs text-slate-500 line-clamp-1">{p.description}</p>
                                     </div>
                                     <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap justify-end">
@@ -418,10 +466,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                         ) : (
                                             <>
                                                 <button type="button" onClick={(e) => handleDuplicateClick(p.id, e)} className="flex items-center px-3 py-2 text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-bold transition-colors shadow-sm"><Copy size={13} className="mr-1.5" /> {t.copyProject}</button>
-                                                {!isCompleted && <button type="button" onClick={() => initiateAction(p.id, 'COMPLETE')} className="flex items-center px-3 py-2 text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-[11px] font-bold transition-colors shadow-sm"><CheckSquare size={13} className="mr-1.5" /> {t.markCompleted}</button>}
-                                                {!isActive && <button type="button" onClick={() => initiateAction(p.id, 'ACTIVATE')} className="flex items-center px-3 py-2 text-green-600 bg-green-50 hover:bg-green-100 border border-green-200 rounded-lg text-[11px] font-bold transition-colors shadow-sm"><RefreshCw size={13} className="mr-1.5" /> {t.markActive}</button>}
-                                                {isActive && <button type="button" onClick={() => initiateAction(p.id, 'SUSPEND')} className="flex items-center px-3 py-2 text-amber-600 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg text-[11px] font-bold transition-colors shadow-sm"><Ban size={13} className="mr-1.5" /> {t.suspendProject}</button>}
-                                                <button type="button" onClick={() => initiateAction(p.id, 'DELETE')} className="flex items-center px-3 py-2 text-slate-500 bg-white hover:bg-slate-50 hover:text-red-600 border border-slate-200 hover:border-red-200 rounded-lg text-[11px] font-bold transition-colors shadow-sm"><Trash2 size={13} className="mr-1.5" /> {t.terminateProject}</button>
+                                                {isOwner(p) && !isCompleted && <button type="button" onClick={() => initiateAction(p.id, 'COMPLETE')} className="flex items-center px-3 py-2 text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-[11px] font-bold transition-colors shadow-sm"><CheckSquare size={13} className="mr-1.5" /> {t.markCompleted}</button>}
+                                                {isOwner(p) && !isActive && <button type="button" onClick={() => initiateAction(p.id, 'ACTIVATE')} className="flex items-center px-3 py-2 text-green-600 bg-green-50 hover:bg-green-100 border border-green-200 rounded-lg text-[11px] font-bold transition-colors shadow-sm"><RefreshCw size={13} className="mr-1.5" /> {t.markActive}</button>}
+                                                {isOwner(p) && isActive && <button type="button" onClick={() => initiateAction(p.id, 'SUSPEND')} className="flex items-center px-3 py-2 text-amber-600 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg text-[11px] font-bold transition-colors shadow-sm"><Ban size={13} className="mr-1.5" /> {t.suspendProject}</button>}
+                                                {isOwner(p)
+                                                    ? <button type="button" onClick={() => initiateAction(p.id, 'DELETE')} className="flex items-center px-3 py-2 text-slate-500 bg-white hover:bg-slate-50 hover:text-red-600 border border-slate-200 hover:border-red-200 rounded-lg text-[11px] font-bold transition-colors shadow-sm"><Trash2 size={13} className="mr-1.5" /> {t.terminateProject}</button>
+                                                    : <span className="px-3 py-2 text-[11px] text-slate-400 italic">{t.ownerOnlyAction}</span>}
                                             </>
                                         )}
                                     </div>

@@ -130,10 +130,40 @@ Deno.serve(async (req) => {
       return json({ error: 'Admin access required' }, 403)
     }
 
-    // Ownership guard: row must belong to the calling user (or not exist yet)
-    async function assertOwnership(table: string, id: string): Promise<boolean> {
+    // Visibility model: a PERSONAL project belongs to its creator only, a TEAM
+    // project is visible to every logged-in user. Reading and editing the tasks
+    // inside a TEAM project is open to all; project-level mutations (rename,
+    // status, visibility, delete) stay owner-only.
+    const TEAM_VISIBILITY = 'TEAM'
+
+    async function getVisibleProjectIds(): Promise<string[]> {
+      const { data, error } = await supabase
+        .from('projects')
+        .select('id')
+        .or(`user_id.eq.${userId},visibility.eq.${TEAM_VISIBILITY}`)
+      if (error) throw error
+      return (data || []).map((r: any) => r.id)
+    }
+
+    // Returns true when the caller may touch the project. A missing row means the
+    // project is being created right now, so the caller becomes its owner.
+    async function canAccessProject(projectId: string, requireOwner = false): Promise<boolean> {
+      const { data, error } = await supabase
+        .from('projects')
+        .select('user_id, visibility')
+        .eq('id', projectId)
+        .maybeSingle()
+      if (error) throw error
+      if (!data) return true
+      if (data.user_id === userId) return true
+      return !requireOwner && data.visibility === TEAM_VISIBILITY
+    }
+
+    // Keeps the original creator when a teammate edits a shared row.
+    async function rowOwner(table: string, id: string): Promise<string | undefined> {
+      if (!id) return undefined
       const { data } = await supabase.from(table).select('user_id').eq('id', id).maybeSingle()
-      return !data || data.user_id === userId
+      return data?.user_id ?? undefined
     }
 
     let result
@@ -304,21 +334,70 @@ Deno.serve(async (req) => {
 
       // Projects
       case 'getProjects': {
-        const { data: projectsData } = await supabase
+        const visibleIds = await getVisibleProjectIds()
+        if (visibleIds.length === 0) {
+          result = []
+          break
+        }
+
+        const { data: projectsData, error: projError } = await supabase
           .from('projects')
           .select('*')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false })
-        const { data: tasksData } = await supabase.from('tasks').select('*').eq('user_id', userId)
-        const { data: subtasksData } = await supabase.from('subtasks').select('*').eq('user_id', userId)
-        const { data: milestonesData } = await supabase.from('milestones').select('*').eq('user_id', userId)
+          .in('id', visibleIds)
+          .order('created_at', { ascending: true })
+        if (projError) return json({ error: projError.message }, 500)
+
+        // Soft-deleted projects are kept so the recycle bin still works, but only
+        // for their owner: nobody else should restore or purge them.
+        const readableProjects = (projectsData || []).filter(
+          (p: any) => !p.deleted_at || p.user_id === userId
+        )
+        const readableIds = readableProjects.map((p: any) => p.id)
+        if (readableIds.length === 0) {
+          result = []
+          break
+        }
+
+        const { data: tasksData } = await supabase
+          .from('tasks')
+          .select('*')
+          .in('project_id', readableIds)
+
+        const taskIds = (tasksData || []).map((t: any) => t.id)
+        let subtasksData: any[] = []
+        if (taskIds.length > 0) {
+          const { data: subtaskRows } = await supabase
+            .from('subtasks')
+            .select('*')
+            .in('task_id', taskIds)
+          subtasksData = subtaskRows || []
+        }
+
+        const { data: milestonesData } = await supabase
+          .from('milestones')
+          .select('*')
+          .in('project_id', readableIds)
+
+        // Owner display names, so the UI can label which teammate a team project belongs to
+        const ownerIds = Array.from(new Set(readableProjects.map((p: any) => p.user_id))).filter(Boolean)
+        let ownerNameById: Record<string, string> = {}
+        if (ownerIds.length > 0) {
+          const { data: ownerRows } = await supabase
+            .from('users')
+            .select('id, name')
+            .in('id', ownerIds as string[])
+          ownerNameById = Object.fromEntries((ownerRows || []).map((u: any) => [u.id, u.name]))
+        }
 
         // Assemble nested camelCase project objects expected by the frontend
-        result = (projectsData || []).map((p: any) => ({
+        result = readableProjects.map((p: any) => ({
           id: p.id,
           name: p.name,
           description: p.description ?? '',
           status: p.status,
+          visibility: p.visibility || 'PERSONAL',
+          ownerId: p.user_id,
+          ownerName: ownerNameById[p.user_id],
           deletedAt: p.deleted_at,
           createdAt: p.created_at,
           tasks: (tasksData || [])
@@ -360,9 +439,18 @@ Deno.serve(async (req) => {
       }
 
       case 'saveProject': {
-        if (!(await assertOwnership('projects', params.project.id))) {
+        // Project-level writes stay owner-only, even for TEAM projects.
+        if (!(await canAccessProject(params.project.id, true))) {
           return json({ error: 'Forbidden' }, 403)
         }
+        // Only touch visibility when the client explicitly sent it, so importing
+        // an older backup cannot silently downgrade a TEAM project.
+        const visibility =
+          params.project.visibility === TEAM_VISIBILITY
+            ? TEAM_VISIBILITY
+            : params.project.visibility === 'PERSONAL'
+            ? 'PERSONAL'
+            : undefined
         const { data: projectData, error } = await supabase
           .from('projects')
           .upsert({
@@ -373,6 +461,7 @@ Deno.serve(async (req) => {
             status: params.project.status,
             deleted_at: params.project.deletedAt,
             created_at: params.project.createdAt,
+            ...(visibility ? { visibility } : {}),
           })
           .select()
           .single()
@@ -456,6 +545,9 @@ Deno.serve(async (req) => {
       }
 
       case 'deleteProject': {
+        if (!(await canAccessProject(params.projectId, true))) {
+          return json({ error: 'Forbidden' }, 403)
+        }
         const { error } = await supabase.from('projects').update({ deleted_at: new Date().toISOString(), status: 'TRASHED' }).eq('id', params.projectId).eq('user_id', userId)
         if (error) throw error
         result = { success: true }
@@ -463,6 +555,9 @@ Deno.serve(async (req) => {
       }
 
       case 'hardDeleteProject': {
+        if (!(await canAccessProject(params.projectId, true))) {
+          return json({ error: 'Forbidden' }, 403)
+        }
         const { error } = await supabase.from('projects').delete().eq('id', params.projectId).eq('user_id', userId)
         if (error) throw error
         result = { success: true }
@@ -471,28 +566,34 @@ Deno.serve(async (req) => {
 
       // Tasks
       case 'getTasks': {
+        const visibleIds = await getVisibleProjectIds()
+        if (visibleIds.length === 0) {
+          result = []
+          break
+        }
         const { data: tasksData } = await supabase
           .from('tasks')
           .select('*')
-          .eq('user_id', userId)
+          .in('project_id', visibleIds)
           .order('created_at', { ascending: false })
         result = tasksData || []
         break
       }
 
       case 'saveTask': {
-        if (!(await assertOwnership('tasks', params.task.id))) {
-          return json({ error: 'Forbidden' }, 403)
-        }
-        if (!(await assertOwnership('projects', params.task.projectId))) {
+        const taskProjectId = params.task.projectId || params.task.project_id
+        if (!params.task.id) return json({ error: 'Task id required' }, 400)
+        if (!taskProjectId) return json({ error: 'projectId required' }, 400)
+        // Anyone may edit tasks inside a TEAM project; PERSONAL stays owner-only.
+        if (!(await canAccessProject(taskProjectId, false))) {
           return json({ error: 'Forbidden' }, 403)
         }
         const { data: taskData, error } = await supabase
           .from('tasks')
           .upsert({
             id: params.task.id,
-            project_id: params.task.projectId,
-            user_id: userId,
+            project_id: taskProjectId,
+            user_id: (await rowOwner('tasks', params.task.id)) || userId,
             title: params.task.title,
             description: params.task.description,
             status: params.task.status,
@@ -508,12 +609,41 @@ Deno.serve(async (req) => {
           .select()
           .single()
         if (error) throw error
+
+        // Persist the checklist too, so a single saveTask writes the whole task.
+        const taskSubtasks = Array.isArray(params.task.subtasks) ? params.task.subtasks : []
+        for (const subtask of taskSubtasks) {
+          if (!subtask.id) continue
+          const { error: subtaskError } = await supabase
+            .from('subtasks')
+            .upsert({
+              id: subtask.id,
+              task_id: params.task.id,
+              user_id: (await rowOwner('subtasks', subtask.id)) || userId,
+              title: subtask.title || '',
+              completed: !!subtask.completed,
+              assignee: subtask.assignee || '',
+              due_date: subtask.dueDate || subtask.due_date || null,
+            })
+          if (subtaskError) throw subtaskError
+        }
+        const keepSubtaskIds = taskSubtasks.filter((s: any) => s.id).map((s: any) => s.id)
+        const cleanup =
+          keepSubtaskIds.length > 0
+            ? await supabase.from('subtasks').delete().eq('task_id', params.task.id).not('id', 'in', `(${keepSubtaskIds.join(',')})`)
+            : await supabase.from('subtasks').delete().eq('task_id', params.task.id)
+        if (cleanup.error) throw cleanup.error
+
         result = taskData
         break
       }
 
       case 'deleteTask': {
-        const { error } = await supabase.from('tasks').delete().eq('id', params.taskId).eq('user_id', userId)
+        const { data: taskRow } = await supabase.from('tasks').select('project_id').eq('id', params.taskId).maybeSingle()
+        if (taskRow && !(await canAccessProject(taskRow.project_id, false))) {
+          return json({ error: 'Forbidden' }, 403)
+        }
+        const { error } = await supabase.from('tasks').delete().eq('id', params.taskId)
         if (error) throw error
         result = { success: true }
         break
@@ -521,28 +651,33 @@ Deno.serve(async (req) => {
 
       // Milestones
       case 'getMilestones': {
+        const visibleIds = await getVisibleProjectIds()
+        if (visibleIds.length === 0) {
+          result = []
+          break
+        }
         const { data: milestonesData } = await supabase
           .from('milestones')
           .select('*')
-          .eq('user_id', userId)
+          .in('project_id', visibleIds)
           .order('created_at', { ascending: false })
         result = milestonesData || []
         break
       }
 
       case 'saveMilestone': {
-        if (!(await assertOwnership('milestones', params.milestone.id))) {
-          return json({ error: 'Forbidden' }, 403)
-        }
-        if (!(await assertOwnership('projects', params.milestone.projectId))) {
+        const milestoneProjectId = params.milestone.projectId || params.milestone.project_id
+        if (!params.milestone.id) return json({ error: 'Milestone id required' }, 400)
+        if (!milestoneProjectId) return json({ error: 'projectId required' }, 400)
+        if (!(await canAccessProject(milestoneProjectId, false))) {
           return json({ error: 'Forbidden' }, 403)
         }
         const { data: milestoneData, error } = await supabase
           .from('milestones')
           .upsert({
             id: params.milestone.id,
-            project_id: params.milestone.projectId,
-            user_id: userId,
+            project_id: milestoneProjectId,
+            user_id: (await rowOwner('milestones', params.milestone.id)) || userId,
             title: params.milestone.title,
             date: params.milestone.date,
             completed: !!params.milestone.completed,
@@ -555,7 +690,11 @@ Deno.serve(async (req) => {
       }
 
       case 'deleteMilestone': {
-        const { error } = await supabase.from('milestones').delete().eq('id', params.milestoneId).eq('user_id', userId)
+        const { data: milestoneRow } = await supabase.from('milestones').select('project_id').eq('id', params.milestoneId).maybeSingle()
+        if (milestoneRow && !(await canAccessProject(milestoneRow.project_id, false))) {
+          return json({ error: 'Forbidden' }, 403)
+        }
+        const { error } = await supabase.from('milestones').delete().eq('id', params.milestoneId)
         if (error) throw error
         result = { success: true }
         break
@@ -563,28 +702,41 @@ Deno.serve(async (req) => {
 
       // Subtasks
       case 'getSubtasks': {
+        const visibleIds = await getVisibleProjectIds()
+        if (visibleIds.length === 0) {
+          result = []
+          break
+        }
+        const { data: visibleTasks } = await supabase.from('tasks').select('id').in('project_id', visibleIds)
+        const visibleTaskIds = (visibleTasks || []).map((t: any) => t.id)
+        if (visibleTaskIds.length === 0) {
+          result = []
+          break
+        }
         const { data: subtasksData } = await supabase
           .from('subtasks')
           .select('*')
-          .eq('user_id', userId)
+          .in('task_id', visibleTaskIds)
           .order('created_at', { ascending: false })
         result = subtasksData || []
         break
       }
 
       case 'saveSubtask': {
-        if (!(await assertOwnership('subtasks', params.subtask.id))) {
-          return json({ error: 'Forbidden' }, 403)
-        }
-        if (!(await assertOwnership('tasks', params.subtask.taskId))) {
+        const subtaskTaskId = params.subtask.taskId || params.subtask.task_id
+        if (!params.subtask.id) return json({ error: 'Subtask id required' }, 400)
+        if (!subtaskTaskId) return json({ error: 'taskId required' }, 400)
+        const { data: parentTask } = await supabase.from('tasks').select('project_id').eq('id', subtaskTaskId).maybeSingle()
+        if (!parentTask) return json({ error: 'Parent task not found' }, 404)
+        if (!(await canAccessProject(parentTask.project_id, false))) {
           return json({ error: 'Forbidden' }, 403)
         }
         const { data: subtaskData, error } = await supabase
           .from('subtasks')
           .upsert({
             id: params.subtask.id,
-            task_id: params.subtask.taskId,
-            user_id: userId,
+            task_id: subtaskTaskId,
+            user_id: (await rowOwner('subtasks', params.subtask.id)) || userId,
             title: params.subtask.title,
             completed: !!params.subtask.completed,
             assignee: params.subtask.assignee || '',
@@ -598,7 +750,14 @@ Deno.serve(async (req) => {
       }
 
       case 'deleteSubtask': {
-        const { error } = await supabase.from('subtasks').delete().eq('id', params.subtaskId).eq('user_id', userId)
+        const { data: subtaskRow } = await supabase.from('subtasks').select('task_id').eq('id', params.subtaskId).maybeSingle()
+        if (subtaskRow) {
+          const { data: parentTask } = await supabase.from('tasks').select('project_id').eq('id', subtaskRow.task_id).maybeSingle()
+          if (parentTask && !(await canAccessProject(parentTask.project_id, false))) {
+            return json({ error: 'Forbidden' }, 403)
+          }
+        }
+        const { error } = await supabase.from('subtasks').delete().eq('id', params.subtaskId)
         if (error) throw error
         result = { success: true }
         break

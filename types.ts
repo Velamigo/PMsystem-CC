@@ -51,11 +51,16 @@ export interface Milestone {
   completed: boolean;
 }
 
+export type ProjectVisibility = 'PERSONAL' | 'TEAM';
+
 export interface Project {
   id: string;
   name: string;
   description: string;
   status: ProjectStatus; // New field
+  visibility?: ProjectVisibility; // PERSONAL = creator only, TEAM = every logged-in user
+  ownerId?: string; // Creator's user id, returned by the backend
+  ownerName?: string; // Creator's display name, so TEAM projects can be attributed
   deletedAt?: string; // For 30-day retention
   milestones: Milestone[];
   tasks: Task[]; 
