@@ -146,7 +146,21 @@ Deno.serve(async (req) => {
 
 ## 5. 阶段五：部署
 
-### 5.1 Cloudflare（推荐，支持私有仓库、免费无限流量）
+### 5.1 主线：GitHub Pages（国内可直连）
+
+线上地址 <https://velamigo.github.io/PMsystem-CC/>（仓库 public，Pages 已启用，source = `gh-pages` 分支）。
+
+1. 发布命令：`npm run deploy`（= `vite build` + `gh-pages -d dist`）。
+2. GitHub 构建约 1 分钟，`index.html` 有 CDN 缓存（`max-age=600`），所以更新后最多 10 分钟才全量生效；带 hash 的 assets 不受影响。
+3. `vite.config.ts` 的 `base` 必须是 `'./'`，否则子路径下资源 404。
+4. 本项目无前端路由（纯状态切换页面），因此不需要 `404.html` 兜底。
+5. 页面 origin 是 `https://velamigo.github.io`（不含 `/PMsystem-CC/` 路径），已在 Edge Function 的 `ALLOWED_ORIGINS` 内。
+6. 外部依赖铁律：不要引入 `cdn.tailwindcss.com`、`fonts.googleapis.com` 等运行时外链。它们是渲染阻塞请求，国内线路慢或不通时表现为长时间空白页（2026-09 已改为构建期编译 Tailwind + 系统字体栈）。
+
+### 5.2 备用：Cloudflare Worker（国内需代理）
+
+地址 <https://pmsystem-cc.velamigo.workers.dev>，push main 后自动构建，保留作备用线路。
+
 1. `wrangler.toml`：
    ```toml
    name = "项目名"
@@ -162,7 +176,13 @@ Deno.serve(async (req) => {
 6. 把最终域名加进 Edge Function 的 `ALLOWED_ORIGINS` 并重新部署 Function。
 7. 之后更新流程：本地改 → `git push` → Cloudflare 自动构建（1-2 分钟）。
 
-### 5.2 vite 配置铁律
+**为什么它只能当备用（2026-09 实测）**：`*.workers.dev` 在中国大陆被 DNS 整体污染——同一域名 Google DNS 返回真实的 Cloudflare IP `104.21.73.55`，阿里 DNS 返回 `128.121.243.106`、360 DNS 返回 `118.193.240.37`（均为假 IP），国内不开代理打不开。要国内直连必须绑自定义域名（Cloudflare 自定义域名无需备案）。
+
+同类被污染的还有 `*.pages.dev`、`*.vercel.app`、`*.netlify.app`。腾讯 EdgeOne Pages 虽是免费国内平台，但其默认域名按官方文档在中国大陆要么只有 3 小时有效的预览链接、要么直接返回 401，稳定访问需绑**已备案**域名。`*.github.io` 的 DNS 未被污染，属于"能连但看线路"，故作为主线。
+
+后端 `*.supabase.co` 目前 DNS 干净、国内可连通，但 Supabase 官方承认过该域名在多个国家被运营商整体封锁的历史；若出现"页面能开、登录后一直转圈"，说明后端线路被断，需要把请求改为同域转发（前端只请求自有域名，由其代理到 Supabase）。
+
+### 5.3 vite 配置铁律
 - `base` 用 `'./'`（相对路径）。用 `'/仓库名/'` 会导致 Cloudflare 根域名下资源 404 白屏；用 `'./'` 两边通吃。
 
 ### 5.3 GitHub Pages（备选，仅公开仓库）
@@ -207,6 +227,8 @@ Deno.serve(async (req) => {
 | 限流不生效 | Edge 多 isolate，内存 Map 不共享 | 限流计数存数据库表 |
 | Cloudflare 打开白屏 | vite `base` 是 GH Pages 子路径 | 改 `base: './'` |
 | workers.dev 打不开 | 路由默认 Disabled | Settings → Domains & Routes 启用 |
+| 国内不开代理打不开线上（workers.dev） | `*.workers.dev` 在中国大陆被 DNS 污染（返回假 IP） | 用 GitHub Pages 主线地址；国内要直连须绑自定义域名 |
+| 页面长时间空白、Console 无报错 | 渲染阻塞外链（`cdn.tailwindcss.com` / `fonts.googleapis.com`）加载不到 | 样式改构建期编译，字体用系统栈，不引运行时外链 |
 | 部署后网页还是旧的 | 浏览器/CDN 缓存 | 无痕模式或强刷 |
 | 找不到 JWT/Secrets 设置页 | 新版 Dashboard 改版 | JWT 在 Settings→API Keys/JWT Keys；Secrets 在 Edge Functions 设置 |
 | 重命名管理员后多出重复账号 | 初始化只查固定用户名 | 改查"是否存在任意 admin" |
@@ -214,7 +236,7 @@ Deno.serve(async (req) => {
 ## 9. 开工前必问用户的问题
 
 1. 团队规模？（决定是否需要审批流、限流强度）
-2. 部署平台：Cloudflare（私有仓库+无限流量，推荐）还是 GitHub Pages（必须公开仓库）？
+2. 部署平台：国内访问默认 GitHub Pages（本项目主线，仓库必须公开）；Cloudflare Worker 作备用（支持私有仓库+无限流量，但 `*.workers.dev` 国内被 DNS 污染，需代理或自定义域名）。
 3. 是否需要管理员审批注册？
 4. 首个管理员账号名/初始密码（提醒部署后立即修改）。
 5. 域名偏好（workers.dev 子域名可自定义一次）。
