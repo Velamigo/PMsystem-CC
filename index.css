@@ -1,8 +1,12 @@
-
-/* @tailwind directives removed to rely on CDN for stability in preview */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 body { 
-    font-family: 'Inter', sans-serif; 
+    /* System font stack (incl. Chinese) — no external webfont request, which is
+       render-blocking and unreliable behind the GFW. */
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+        'Hiragino Sans GB', 'Microsoft YaHei', 'Inter', sans-serif;
     background-color: #f8fafc; 
 }
 
